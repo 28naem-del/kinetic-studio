@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kinetic-studio"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Programmatic motion-graphics video engine: beat-synced kinetic type, explainers, product promos, data stories and karaoke clips from a JSON spec."
 readme = "README.md"
 authors = [{ name = "Naem / Aristotle Intelligence" }]
@@ -19,20 +19,35 @@ requires-python = ">=3.10"
 dependencies = ["skia-python>=87.5", "numpy>=1.24", "opencv-python-headless>=4.8"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.5", "mypy>=1.8", "pre-commit>=3"]
+# The MCP server (kstudio-mcp) speaks the protocol with the standard library only; the extra exists so
+# `pip install "kinetic-studio[mcp]"` / `uv tool install "kinetic-studio[mcp]"` stay stable install lines.
+mcp = []
+dev = ["pytest>=7", "ruff>=0.5", "mypy>=1.8", "pre-commit>=3", "jsonschema>=4.18"]
 
 [project.urls]
 Homepage = "https://github.com/28naem-del/kinetic-studio"
 Issues = "https://github.com/28naem-del/kinetic-studio/issues"
 
 [project.scripts]
+kinetic-studio = "kstudio.cli:main"
 kstudio = "kstudio.cli:main"
+kstudio-mcp = "kstudio.mcp_server:main"
 
-[tool.setuptools.packages.find]
-include = ["kstudio*"]
+[tool.setuptools]
+packages = ["kstudio", "kstudio.audio", "kstudio.scenes", "kstudio.examples"]
+include-package-data = false
+
+[tool.setuptools.package-dir]
+# The example projects ship inside the wheel as kstudio/examples (found by kstudio.spec.examples_dir()).
+"kstudio.examples" = "examples"
+
+[tool.setuptools.dynamic]
+version = { attr = "kstudio.__version__" }
 
 [tool.setuptools.package-data]
 kstudio = ["assets/fonts/*"]
+"kstudio.examples" = ["*/*.json", "*/*.jsonc", "*/*.js", "*/*.mjs", "*/*.png", "*/*.jpg", "*/*.svg",
+                      "*/*.wav", "*/*.mp3", "*/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
