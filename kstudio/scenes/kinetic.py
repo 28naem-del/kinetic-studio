@@ -10,8 +10,8 @@ Variable axes: headline words land by animating the Archivo axes, wdth 70 -> `wi
 The size is fitted to the final instance, so the word stretches out to full width on the hit.
 
 Chrome (all kinetic scenes): when the mode sets "chrome": true (kinetic does) or a scene sets
-"chrome": true, a small grid-aligned frame is drawn: tempo + beat dot top right, a scene
-index and a running beat counter above a ticker strip at the bottom safe line. The ticker
+"chrome": true, a small grid-aligned frame is drawn: a scene index, the tempo with a beat dot
+and a running beat counter above a ticker strip at the bottom safe line. The ticker
 scrolls on the beat grid across cuts and lists the film's own words (override with
 "ticker": "TEXT"; "chrome": false hides it per scene).
 """
@@ -137,7 +137,8 @@ def content_floor(ctx: Ctx, scene: Scene) -> float:
 
 
 def draw_chrome(ctx: Ctx, scene: Scene, ground: str) -> None:
-    """Tempo + beat dot (top right), scene index + beat counter + ticker strip (bottom safe line)."""
+    """Scene index (left) and tempo + beat dot + beat counter (right) over a hairline, then a
+    ticker strip on the bottom safe line. Kept off the top line, which belongs to the handle."""
     if not _chrome_on(scene):
         return
     g = L.grid(ctx)
@@ -148,11 +149,6 @@ def draw_chrome(ctx: Ctx, scene: Scene, ground: str) -> None:
     fm = meta.font(ctx, weight=600)
     tk = meta.tk(ctx)
     pulse = _beat_pulse(ctx, 0.5)
-    # top right: tempo, beat dot flashing on the beat
-    bpm = f"{ctx.tl.bpm:.0f} BPM"
-    w = D.draw_text(c, bpm, g.x1, g.chrome_y, fm, ctx.pal(ink, 0.62), align="right", tracking=tk)
-    r = g.px(7) * (1 + 0.35 * pulse)
-    c.drawCircle(g.x1 - w - g.px(22), g.chrome_y - D.cap_height(fm) / 2, r, D.paint(ctx.pal(acc, 0.35 + 0.65 * pulse)))
     # bottom: ticker baseline on the safe line, labels above a hairline
     kick = L.TYPE["kicker"]
     fk = kick.font(ctx, weight=700)
@@ -168,7 +164,10 @@ def draw_chrome(ctx: Ctx, scene: Scene, ground: str) -> None:
     lab_y = rule_y - g.bl(2)
     D.draw_text(c, f"({idx:02d}/{n:02d})  {scene.type.upper()}", g.x0, lab_y, fm, ctx.pal(ink, 0.62),
                 align="left", tracking=tk)
-    D.draw_text(c, f"BEAT {gb:03d}", g.x1, lab_y, fm, ctx.pal(ink, 0.45 + 0.4 * pulse), align="right", tracking=tk)
+    w = D.draw_text(c, f"{ctx.tl.bpm:.0f} BPM  BEAT {gb:03d}", g.x1, lab_y, fm, ctx.pal(ink, 0.5 + 0.35 * pulse),
+                    align="right", tracking=tk)
+    r = g.px(7) * (1 + 0.35 * pulse)  # beat dot, flashing on the beat
+    c.drawCircle(g.x1 - w - g.px(20), lab_y - D.cap_height(fm) / 2, r, D.paint(ctx.pal(acc, 0.35 + 0.65 * pulse)))
     # ticker: one 16th-note step of travel per 16th (continuous across cuts: film beat clock)
     beat_abs = ctx.tl.time_to_beat(ctx.start + ctx.lt)
     off = -beat_abs * g.px(64)
