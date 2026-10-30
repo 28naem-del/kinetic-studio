@@ -46,7 +46,8 @@
       ],
       "first": "1b", "stagger": "1b",
       "transition": { "kind": "push", "dir": "up", "dur": "1/2b" }, "dur": "4b" },
-    { "type": "end_card", "id": "outro", "icon": "book", "title": "Keep data close.", "body": "Fast code is cache-friendly code.",
+    { "type": "end_card", "id": "outro", "icon": "book", "brand": "Kinetic Studio", "title": "Keep data close.",
+      "body": "Fast code is cache-friendly code.", "cta": "Follow for more",
       "small": "Latencies approximate, typical desktop CPU. Source: Hennessy & Patterson, Computer Architecture, 6th ed.",
       "handle": "@kineticstudio",
       "transition": { "kind": "cut", "on": "downbeat" }, "dur": "4b" }

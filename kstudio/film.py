@@ -421,13 +421,21 @@ class Film:
             u = min(local / 0.2, (m.end - t) / 0.2)
             draw_caption(ctx, str(m.data.get("text", "")), u, local, m.dur, bool(m.data.get("karaoke", True)))
         if self.handle:
-            draw_handle(ctx, self.handle)
+            sc = self.scene_at(t)
+            if not getattr(sc, "owns_handle", False):  # an end card sets its own handle
+                draw_handle(ctx, self.handle, ground=self.ground_at(t))
         if self.show_progress:
             draw_progress(ctx, t / max(self.duration, 1e-3))
         if not self.defer_flash:
             rgb, fl = self.flash_at(int(math.floor(t * self.fps + 0.5 + 1e-9)))
             if fl > 0.002:
                 c.drawRect(skia.Rect(0, 0, self.W, self.H), D.paint(D.argb(rgb, fl)))
+
+    def ground_at(self, t: float) -> str:
+        """Ground colour key on screen at film time t (the incoming scene's once a window is past
+        its cut)."""
+        sc = self.scene_at(t)
+        return sc.ground_at(max(t - sc.start, 0.0))
 
     def flash_at(self, i: int) -> tuple[tuple[int, int, int], float]:
         """Accent flash for delivered frame i: (rgb, opacity). Flash cuts and hit markers with a

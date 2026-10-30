@@ -12,7 +12,7 @@ import skia
 from .. import draw as D
 from .. import ease as E
 from .. import layout as L
-from .base import Ctx, Cue, Scene, register
+from .base import Ctx, Cue, Scene, _lift, register
 
 T = L.TYPE
 
@@ -50,7 +50,7 @@ class Title(Scene):
                 "sfx": "swish"}
 
     def cues(self) -> list[Cue]:
-        return [Cue("sfx", 0.0, data={"sound": self.p["sfx"]}), Cue("sfx", 0.15, data={"sound": "chime", "gain": -6})]
+        return [Cue("sfx", 0.0, data={"sound": self.p["sfx"]}), Cue("sfx", 0.0, data={"sound": "chime", "gain": -6})]
 
     def draw(self, ctx: Ctx) -> None:
         c, lt = ctx.c, ctx.lt
@@ -266,64 +266,222 @@ class Logo(Scene):
             D.draw_text(c, self.p["url"], g.cx, uy, uf, ctx.pal("accent", a), tracking=url_r.tk(ctx))
 
 
+# ---------------------------------------------------------------------- contrast
+
+def rel_luminance(rgb: tuple[int, int, int]) -> float:
+    """WCAG 2.x relative luminance of an sRGB colour."""
+    def ch(v: float) -> float:
+        v /= 255.0
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = rgb
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+
+def contrast_ratio(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    la, lb = rel_luminance(a), rel_luminance(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def ground_samples(pal: D.Palette, ground: str, style: str | None) -> list[tuple[int, int, int]]:
+    """Colours a small overlay can land on over a ground key + pattern style: the base, plus the
+    lifted pattern colours (grid lines, dots, blobs, mesh patches, the gradient's far end)."""
+    base = pal.rgb(ground)
+    out = [base]
+    if ground == "bg" and style in ("gradient", "grid", "blobs", "mesh"):
+        out.append(pal.rgb("bg2"))
+    if style in ("blobs", "mesh", "dots", "grid") and ground == "bg":
+        for key, d in (("accent", 0.22), ("accent2", 0.16), ("muted", 0.16)):
+            try:
+                out.append(_lift(pal, base, key, d))
+            except KeyError:
+                pass
+    return out
+
+
+def readable(pal: D.Palette, grounds: list[tuple[int, int, int]], min_ratio: float = 4.5,
+             alpha: float = 0.85) -> tuple[tuple[int, int, int], float]:
+    """(rgb, opacity) for small text over any of `grounds` with a WCAG contrast of at least
+    `min_ratio` after blending: the theme ink or ink_dark (whichever reads better on the worst
+    ground), at `alpha` raised as far as needed; pure white/black only as a last resort."""
+    cands = [pal.rgb(k) for k in ("ink", "ink_dark") if k in pal.theme] + [(255, 255, 255), (0, 0, 0)]
+    def worst(rgb: tuple[int, int, int], a: float) -> float:
+        return min(contrast_ratio(D.mix_rgb(g, rgb, a), g) for g in grounds)
+    best = max(cands[:2] or cands, key=lambda c: worst(c, 1.0))
+    if worst(best, 1.0) < min_ratio:
+        best = max(cands, key=lambda c: worst(c, 1.0))
+    a = alpha
+    while a < 1.0 and worst(best, a) < min_ratio:
+        a = min(1.0, a + 0.025)
+    return best, a
+
+
+def _film_bloom(ctx: Ctx) -> float:
+    film = getattr(ctx, "film", None)
+    try:
+        return float(film.cfg.get("post", {}).get("bloom", 0.0)) if film is not None else 0.0
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
+def cta_colors(pal: D.Palette, ground: str, bloom: float = 0.0
+               ) -> tuple[tuple[int, int, int], tuple[int, int, int], bool]:
+    """(fill, label, ring) for a CTA pill. Filled accent with the readable on-accent ink when that
+    pair keeps >= 4.5:1 with headroom for the bloom pass (bloom spills the bright fill over dark
+    glyphs: a 5.5:1 pair on the ink theme measures 2.4:1 after a 0.55 bloom); otherwise an accent
+    ring on a dark accent-tinted fill with a light label, which bloom only brightens."""
+    acc = pal.rgb("accent")
+    on_acc = readable(pal, [acc], 4.5, 1.0)[0]
+    if contrast_ratio(on_acc, acc) >= 4.5 * (1.0 + 2.0 * max(bloom, 0.0)):
+        return acc, on_acc, False
+    base = pal.rgb(ground) if ground in pal.theme else pal.rgb("bg")
+    fill = D.mix_rgb(base, acc, 0.12)
+    label = acc if contrast_ratio(acc, fill) >= 4.5 else readable(pal, [fill], 4.5, 1.0)[0]
+    return fill, label, True
+
+
 @register("end_card")
 class EndCard(Scene):
-    """Calm closing card, flush-left on the grid: icon badge on the shared anchor, statement,
-    accent line, small print, handle on the bottom safe line. Use for disclaimers."""
-    defaults = {"icon": "book", "title": "For learning only.", "body": "Not medical advice.",
-                "small": "", "handle": "", "stop_music": False, "sfx": "chime", "align": "left"}
+    """Closing card on the grid, flush-left from the shared top anchor: a brand lockup (accent
+    badge with an icon + wordmark on the subhead role), the statement (title role), an accent
+    line (body), a CTA pill and the one handle, with small print standing on the bottom safe line.
+    Elements enter one per half beat on the registry "enter" ease and the badge and CTA arrow pulse
+    on every beat. The card owns the handle: the film's corner handle is hidden while it is on
+    screen, and the handle colour is picked for >= 4.5:1 contrast on the card's ground."""
+    defaults = {"icon": "book", "brand": "", "title": "For learning only.", "body": "Not medical advice.",
+                "small": "", "handle": "", "cta": "", "stop_music": False, "sfx": "chime", "align": "left",
+                "step": "1/2b"}
+    owns_handle = True
 
     def cues(self) -> list[Cue]:
-        out = [Cue("sfx", 0.05, data={"sound": self.p["sfx"]})]
+        out = [Cue("sfx", 0.0, data={"sound": self.p["sfx"]})]
         if self.p["stop_music"]:
-            out.append(Cue("cue", 0.05, name="music_stop"))
+            out.append(Cue("cue", 0.0, name="music_stop"))
         return out
 
+    def _handle(self, ctx: Ctx) -> str:
+        film = getattr(ctx, "film", None)
+        return str(self.p["handle"] or (getattr(film, "handle", "") if film is not None else "") or "")
+
     def draw(self, ctx: Ctx) -> None:
-        c, lt = ctx.c, ctx.lt
+        c = ctx.c
         g = L.grid(ctx)
         align = self.p["align"] if self.p["align"] in ("left", "center") else "left"
         x = _anchor_x(g, align)
         ink = ctx.pal.on(self.ground)
-        tr_, br, sr, hr = T["title"], T["body"], T["caption"], T["meta"]
+        style = self.ground_style or ctx.theme.get("ground_style", "solid")
+        grounds = ground_samples(ctx.pal, self.ground, style)
+        enter = E.resolve("enter")
+        pop = E.resolve("pop")
+        step = self.time(self.p["step"])
+        beat = max(self.beats(1.0), 1e-3)
+
+        def u(k: int, beats: float = 1.0) -> float:  # 0..1 entrance of element k
+            return E.clamp((ctx.lt - k * step) / max(beats * beat, 1e-3))
+
+        # beat pulse: a short decay after every beat from the second beat on
+        lb = ctx.lt / beat
+        pulse = (1.0 - (lb % 1.0)) ** 3 if lb >= 1.0 else 0.0
+
+        sub, tr_, br, cr = T["subhead"], T["title"], T["body"], T["caption"]
+        brand = str(self.p["brand"] or "")
+        wf = sub.font(ctx, weight=700, face="display")
+        wcap = D.cap_height(wf)
+        R = wcap * 0.95                                       # badge radius on the wordmark's cap
         tf = L.fit_role(ctx, tr_, self.p["title"], g.head_w, weight=600)
         tlines = D.wrap(tf, self.p["title"], g.head_w, tr_.tk(ctx), style="balance")
         bf = br.font(ctx, weight=600)
         blines = D.wrap(bf, self.p["body"], g.measure, br.tk(ctx)) if self.p["body"] else []
-        sf = sr.font(ctx, weight=400)
-        slines = D.wrap(sf, self.p["small"], g.measure, sr.tk(ctx)) if self.p["small"] else []
-        R = tr_.px(g) * 0.6
+        handle = self._handle(ctx)
+        cta = str(self.p["cta"] or "")
+        cf = br.font(ctx, weight=700)
+        hf = br.font(ctx, weight=600)
+        sf = cr.font(ctx, weight=400)
+        slines = D.wrap(sf, self.p["small"], g.measure, cr.tk(ctx)) if self.p["small"] else []
+
         gap = g.bl(6)
+        lock_h = 2 * R
         th = D.block_height(tf, len(tlines), tr_.leading)
         bh = D.block_height(bf, len(blines), br.leading) + gap if blines else 0.0
-        sh = D.block_height(sf, len(slines), sr.leading) + gap if slines else 0.0
-        top = g.place(2 * R + 1.5 * gap + th + bh + sh, "top")
+        pill_pad = g.bl(2.5)
+        ch = (D.cap_height(cf) + 2 * pill_pad + 2 * gap) if cta else 0.0
+        hh = (D.cap_height(hf) + gap) if handle else 0.0
+        top = g.place(lock_h + 2 * gap + th + bh + ch + hh, "top")
 
-        e = E.out_expo(E.clamp(lt / 0.5))
-        bx = x + R if align == "left" else x
-        by = top + R
-        if e > 0:
-            c.drawCircle(bx, by, R * e, D.paint(ctx.pal("accent", 0.14)))
-            c.drawCircle(bx, by, R * e, D.paint(ctx.pal("accent", 0.9), stroke=g.bl(0.375)))
-            D.icon(c, self.p["icon"], bx, by, R * 0.86 * e, ctx.pal("accent"))
-        y = top + 2 * R + 1.5 * gap
+        # 1. brand lockup: badge + wordmark, on beat 0
+        e0 = u(0)
+        if e0 > 0:
+            k = pop(e0) * (1.0 + 0.05 * pulse)
+            lock_w = 2 * R + (g.bl(3) + D.text_w(wf, brand, sub.tk(ctx, "display")) if brand else 0.0)
+            bx = x + R if align == "left" else x - lock_w / 2 + R
+            by = top + R
+            c.drawCircle(bx, by, R * k, D.paint(ctx.pal("accent")))
+            on_acc = readable(ctx.pal, [ctx.pal.rgb("accent")], 4.5, 1.0)[0]
+            D.icon(c, self.p["icon"], bx, by, R * 1.05 * k, D.argb(on_acc, min(1.0, e0 * 1.5)))
+            if brand:
+                wx = bx + R + g.bl(3)
+                wy = by + wcap / 2
+                c.save()
+                c.clipRect(skia.Rect(wx - g.bl(1), by - R - g.bl(2), ctx.W * 2, by + R + g.bl(2)))
+                D.draw_text(c, brand, wx - (1 - enter(e0)) * g.bl(6), wy, wf, ctx.pal(ink, enter(e0)), align="left",
+                            tracking=sub.tk(ctx, "display"))
+                c.restore()
+        y = top + lock_h + 2 * gap
+
+        # 2. statement, line by line from the first half beat
         tb = D.set_lines(tf, tlines, x, y, tr_.leading, tr_.tk(ctx), align)
         for i, ln in enumerate(tb.lines):
-            reveal_line(ctx, ln.text, ln.x, ln.baseline, tf, ctx.pal(ink), (lt - 0.2 - i * 0.08) / 0.8, "left", tr_.tk(ctx))
+            reveal_line(ctx, ln.text, ln.x, ln.baseline, tf, ctx.pal(ink), u(1) - i * 0.12, "left", tr_.tk(ctx))
         y = tb.baseline + gap
         if blines:
             bb = D.set_lines(bf, blines, x, y, br.leading, br.tk(ctx), align)
             for i, ln in enumerate(bb.lines):
-                reveal_line(ctx, ln.text, ln.x, ln.baseline, bf, ctx.pal("accent"), (lt - 0.4 - i * 0.08) / 0.8, "left", br.tk(ctx))
+                reveal_line(ctx, ln.text, ln.x, ln.baseline, bf, ctx.pal("accent"), u(2) - i * 0.12, "left", br.tk(ctx))
             y = bb.baseline + gap
+
+        # 3. CTA pill (accent, on-accent ink) with an arrow that nudges on the beat
+        if cta:
+            e3 = enter(u(3))
+            if e3 > 0:
+                arrow = "\u2192"
+                tw = D.text_w(cf, cta, br.tk(ctx))
+                aw = D.text_w(cf, arrow, 0.0)
+                cap = D.cap_height(cf)
+                pw = tw + aw + g.bl(2) + 2 * pill_pad * 1.6
+                ph = cap + 2 * pill_pad
+                py = y + gap
+                px = x if align == "left" else x - pw / 2
+                fill, label, ring = cta_colors(ctx.pal, self.ground, _film_bloom(ctx))
+                c.save()
+                c.clipRect(skia.Rect(px - g.bl(1), py - g.bl(1), px + pw * e3 + g.bl(1), py + ph + g.bl(1)))
+                D.rrect(c, px, py, pw, ph, ph / 2, D.paint(D.argb(fill)))
+                if ring:
+                    sw = max(1.5, g.bl(0.4))
+                    D.rrect(c, px + sw / 2, py + sw / 2, pw - sw, ph - sw, (ph - sw) / 2,
+                            D.paint(ctx.pal("accent"), stroke=sw))
+                D.draw_text(c, cta, px + pill_pad * 1.6, py + pill_pad + cap, cf, D.argb(label), align="left",
+                            tracking=br.tk(ctx))
+                D.draw_text(c, arrow, px + pill_pad * 1.6 + tw + g.bl(2) + g.bl(1.5) * pulse, py + pill_pad + cap, cf,
+                            D.argb(label), align="left")
+                c.restore()
+            y = y + ch
+
+        # 4. the one handle, readable on every theme ground
+        if handle:
+            e4 = enter(u(4 if cta else 3))
+            if e4 > 0:
+                rgb, a = readable(ctx.pal, grounds, 4.5, 0.92)
+                hy = y + (gap if not cta else 0.0) + D.cap_height(hf)
+                D.draw_text(c, handle, x - (1 - e4) * g.bl(4), hy, hf, D.argb(rgb, a * e4), align=align,
+                            tracking=br.tk(ctx))
+
+        # 5. small print on the bottom safe line
         if slines:
-            a = E.clamp((lt - 0.8) / 0.6)
-            for ln in D.set_lines(sf, slines, x, y, sr.leading, sr.tk(ctx), align).lines:
-                D.draw_text(c, ln.text, ln.x, ln.baseline, sf, ctx.pal("muted", a), align="left", tracking=sr.tk(ctx))
-        if self.p["handle"]:
-            hf = hr.font(ctx, weight=600)
-            a = E.clamp((lt - 1.0) / 0.6)
-            D.draw_text(c, self.p["handle"], x, g.safe_bottom, hf, ctx.pal(ink, a), align=align, tracking=hr.tk(ctx))
+            a = enter(u(5))
+            sh = D.block_height(sf, len(slines), cr.leading)
+            rgb, sa = readable(ctx.pal, grounds, 3.0, 0.62)
+            for ln in D.set_lines(sf, slines, x, g.safe_bottom - sh, cr.leading, cr.tk(ctx), align).lines:
+                D.draw_text(c, ln.text, ln.x, ln.baseline, sf, D.argb(rgb, sa * a), align="left", tracking=cr.tk(ctx))
 
 
 # ---------------------------------------------------------------------- overlays
@@ -416,10 +574,18 @@ def draw_caption(ctx: Ctx, text: str, u: float, local: float, dur: float, karaok
             k += 1
 
 
-def draw_handle(ctx: Ctx, handle: str, alpha: float = 0.85) -> None:
+def draw_handle(ctx: Ctx, handle: str, alpha: float = 0.85, ground: str | None = None) -> None:
+    """Corner handle on the chrome line, in whichever theme ink reads at >= 4.5:1 on the ground
+    under it (`ground` key, e.g. a slam scene's paper/accent flip; default the theme bg)."""
     g = L.grid(ctx)
     r = T["meta"]
-    D.draw_text(ctx.c, handle, g.x0, g.chrome_y, r.font(ctx, weight=600), ctx.pal("ink", alpha * 0.8),
+    key = ground or "bg"
+    try:
+        grounds = ground_samples(ctx.pal, key, ctx.theme.get("ground_style", "solid"))
+    except KeyError:
+        grounds = [ctx.pal.rgb("bg")]
+    rgb, a = readable(ctx.pal, grounds, 4.5, alpha * 0.8)
+    D.draw_text(ctx.c, handle, g.x0, g.chrome_y, r.font(ctx, weight=600), D.argb(rgb, a),
                 align="left", tracking=r.tk(ctx))
 
 
