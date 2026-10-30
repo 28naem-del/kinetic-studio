@@ -1,0 +1,45 @@
+# Kinetic Studio
+
+> Local, programmatic motion-graphics video engine: a short JSON spec (scenes on a beat grid plus timeline markers) becomes a finished, beat-synced MP4 with procedural music and sound effects, mixed to -14 LUFS and automatically audited. Five modes: kinetic type, explainer, product promo, data story, social quote or karaoke. Runs on the CPU with Python, Skia and ffmpeg; no API key, no account, no cloud call. MIT licence.
+
+Agents use it through an MCP server (stdio or streamable HTTP), function-calling schemas, a one-shot JSON command line or plain Python. The server needs no extra dependencies:
+
+- MCP command: `uvx --from git+https://github.com/28naem-del/kinetic-studio kstudio-mcp` (from a clone: `python -m kstudio.mcp_server`; HTTP: add `--http 8765`, endpoint `http://127.0.0.1:8765/mcp`)
+- Tools: `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (progress notifications), `audit`. Each returns one JSON object with an `ok` field; failures carry `error: {code, message, hint}`.
+- Workflow: get_schema(mode) -> write the spec from the example -> validate_spec and fix every error -> preview and look at the contact sheet -> render -> report output path and audit verdict.
+- Write every scene length in beats (`"4b"`, `"1/2b"`, `"1bar"`); times can name markers (`"drop-2b"`).
+
+## Docs
+
+- [Agent skill](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/SKILL.md): workflow, beat units, the spec contract, error codes, per-mode writing rules and troubleshooting
+- [Scene reference](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/SCENES.md): all 31 scene types with parameters and defaults, shared keys, transitions
+- [Command line](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/CLI.md): commands, --json output shapes, exit codes
+- [Architecture](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/ARCHITECTURE.md): modules and the render, audio and audit pipeline
+- [README](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/README.md): overview, install, command line, demos
+
+## Tools
+
+- [Tool definitions](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/tools/README.md): how the tool files are generated and how to dispatch calls
+- [MCP tool list](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/tools/mcp-tools.json): the tools/list result with input and output schemas
+- [Function-calling tools](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/tools/functions.json): strict function schemas named kstudio_<tool>
+- [Tool manifest](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/tools/tools.schema.json): plain JSON manifest with invocation details
+
+## Quickstarts
+
+- [Quickstart index](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/README.md): one page per agent framework, alphabetical
+- [Plain Python](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/python.md): in-process calls, function calling, raw MCP
+- [Shell and curl](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/shell.md): one-shot JSON, raw stdio, HTTP
+
+## Examples
+
+- [Kinetic example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/kinetic/spec.json): beat-synced type teaser
+- [Explainer example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/explainer/spec.json): definition, diagram, key facts, end card
+- [Promo example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/promo/spec.json): device hero, features, call to action, brand
+- [Data example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/data/spec.json): counter, line, candles, bars, stat grid, ticker
+- [Social example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/social/spec.json): hook, quote, karaoke, follow
+
+## Optional
+
+- [Full text](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/llms-full.txt): this file plus the skill, tool docs, scene reference and architecture in one file
+- [Changelog](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/CHANGELOG.md)
+- [Third-party notices](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/THIRD_PARTY_NOTICES.md): fonts and licences
