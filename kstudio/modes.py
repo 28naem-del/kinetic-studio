@@ -26,8 +26,8 @@ THEMES: dict[str, dict[str, Any]] = {
         "display": "SpaceGrotesk", "body": "Inter", "mono": "JetBrainsMono", "ground_style": "blobs",
     },
     "terminal": {  # data / trading: near-black, neon green up, hot red down, gold
-        "bg": "#06080b", "bg2": "#0d141b", "paper": "#e9f1f3", "accent": "#19e68c", "accent2": "#f5c542",
-        "ink": "#e9f1f3", "ink_dark": "#06080b", "muted": "#5b6a74", "pos": "#19e68c", "neg": "#ff4d5e",
+        "bg": "#0c1216", "bg2": "#16212a", "paper": "#e9f1f3", "accent": "#19e68c", "accent2": "#f5c542",
+        "ink": "#e9f1f3", "ink_dark": "#06080b", "muted": "#6a7a86", "pos": "#19e68c", "neg": "#ff4d5e",
         "display": "SpaceGrotesk", "body": "Inter", "mono": "JetBrainsMono", "ground_style": "dots",
     },
     "warm": {  # social / quote: espresso, amber, tangerine
@@ -70,13 +70,13 @@ MODES: dict[str, dict[str, Any]] = {
         "audit": {"max_hold": 1.5, "min_motion": 0.7},
     },
     "data": {
-        "description": "Data / stats story: counters, bar/line/candle charts, tickers.",
+        "description": "Editorial data desk: odometer counters, line/candle/bar charts, stat cards, a live tape.",
         "theme": "terminal",
         "music": {"style": "pulse", "bpm": 120},
-        "camera": {"push": 0.03, "roll": 0.003, "shake": 0.5, "bump": 0.012, "drift": 6, "drift_hz": 0.35,
+        "camera": {"push": 0.02, "roll": 0.002, "shake": 0.3, "bump": 0.006, "drift": 4, "drift_hz": 0.3,
                    "carry": "world", "ground_depth": 3.0},
-        "post": {"bloom": 0.45, "grain": 0.04, "vignette": 0.35, "chroma": 0.5},
-        "transition": "zoom",
+        "post": {"bloom": 0.3, "grain": 0.05, "vignette": 0.3, "chroma": 0.3, "grade": "terminal"},
+        "transition": "cut",
         "audit": {"max_hold": 1.5, "min_motion": 0.7},
     },
     "social": {
