@@ -1,228 +1,213 @@
-<p align="center">
-  <img src="docs/media/banner.jpg" alt="Kinetic Studio — brief to beat-synced motion graphics, fully local" width="100%">
-</p>
-
 <h1 align="center">Kinetic Studio</h1>
 
-<p align="center"><b>Brief -> beat-synced motion-graphics video, fully local, no credits.</b></p>
+<p align="center"><b>Turn a one-line brief into a beat-synced motion-graphics video, on your own machine, from any agent.</b></p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green.svg"></a>
   <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue.svg">
   <a href="https://github.com/28naem-del/kinetic-studio/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/28naem-del/kinetic-studio/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Agent skill" src="https://img.shields.io/badge/agent-skill-8a2be2.svg">
+  <a href="docs/quickstarts/README.md"><img alt="MCP server" src="https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-8a2be2.svg"></a>
+  <a href="SKILL.md"><img alt="Agent skill" src="https://img.shields.io/badge/agent-skill-8a2be2.svg"></a>
 </p>
 
-Kinetic Studio turns a short JSON spec (which an agent can write from a one-line brief) into a
-finished vertical or landscape video. You get beat-synced kinetic type, explainers, app promos,
-data stories and karaoke quote clips. Every frame, note and whoosh is generated on your machine,
-with original procedural music and sound design. The mix is normalised to -14 LUFS and every
-render is quality-audited automatically.
+<table align="center">
+  <tr>
+    <td align="center"><img src="demos/kinetic.gif" width="160" alt="kinetic mode: beat-synced type teaser"></td>
+    <td align="center"><img src="demos/explainer.gif" width="160" alt="explainer mode: definition and key facts"></td>
+    <td align="center"><img src="demos/promo.gif" width="160" alt="promo mode: app feature card"></td>
+    <td align="center"><img src="demos/data.gif" width="160" alt="data mode: candlestick chart"></td>
+    <td align="center"><img src="demos/social.gif" width="160" alt="social mode: pull quote"></td>
+  </tr>
+  <tr>
+    <td align="center"><code>kinetic</code></td>
+    <td align="center"><code>explainer</code></td>
+    <td align="center"><code>promo</code></td>
+    <td align="center"><code>data</code></td>
+    <td align="center"><code>social</code></td>
+  </tr>
+</table>
 
-No subscriptions, no API keys, no render credits and no stock-music licences.
+A small JSON spec (scenes on a beat grid plus timeline markers) becomes a finished MP4 with
+original procedural music and sound design, mixed to -14 LUFS and checked by an automatic audit.
+No API key, no account, no render credits, no stock-music licences: everything is generated on
+your CPU. Each demo above is rendered from the matching spec in [`examples/`](examples).
 
-## Modes
+## 30-second quickstart
 
-| Kinetic teaser | Explainer | Product promo | Data story | Social quote |
-|:---:|:---:|:---:|:---:|:---:|
-| <img src="docs/media/kinetic_teaser.gif" width="150" alt="kinetic teaser demo"> | <img src="docs/media/explainer_cpu_cache.gif" width="150" alt="explainer demo"> | <img src="docs/media/promo_app.gif" width="150" alt="promo demo"> | <img src="docs/media/data_dashboard.gif" width="150" alt="data demo"> | <img src="docs/media/social_quote.gif" width="150" alt="social demo"> |
-| `kinetic` | `explainer` | `promo` | `data` | `social` |
-| Huge beat-synced words, whips, 3D type, flashes | Title cards, definitions, labelled diagrams, sources | Phone mockups, feature callouts, CTA, logo sting | Counters, bar/line/candle charts, tickers | Pull-quotes, karaoke captions with word highlight |
-| [`demos/kinetic_teaser.mp4`](demos/kinetic_teaser.mp4) | [`demos/explainer_cpu_cache.mp4`](demos/explainer_cpu_cache.mp4) | [`demos/promo_app.mp4`](demos/promo_app.mp4) | [`demos/data_dashboard.mp4`](demos/data_dashboard.mp4) | [`demos/social_quote.mp4`](demos/social_quote.mp4) |
+**From an agent.** Register the MCP server (any MCP client; needs [uv](https://docs.astral.sh/uv/)
+and ffmpeg):
 
-The MP4s in `demos/` are 720x1280 previews. The full 1080x1920 masters are attached to the
-[v0.1.0 release](https://github.com/28naem-del/kinetic-studio/releases/tag/v0.1.0). Each demo is
-rendered from the matching spec in [`examples/`](examples).
+```bash
+uvx --from git+https://github.com/28naem-del/kinetic-studio kstudio-mcp
+```
 
-| | |
+then ask: *"Make a 10-second kinetic reel that says SHIP IT FRIDAY, preview it, render it."*
+
+**From a terminal.**
+
+```bash
+git clone https://github.com/28naem-del/kinetic-studio.git && cd kinetic-studio
+bash install.sh                    # .venv with skia-python, numpy, opencv
+bin/kstudio new kinetic my-reel    # starter spec from the mode's example
+bin/kstudio render my-reel         # -> my-reel/out/my-reel_reel.mp4 + audit report
+```
+
+## Works with any agent
+
+[AutoGen](docs/quickstarts/autogen.md) ·
+[Claude Code](docs/quickstarts/claude-code.md) ·
+[Cline](docs/quickstarts/cline.md) ·
+[Codex CLI](docs/quickstarts/codex-cli.md) ·
+[Continue](docs/quickstarts/continue.md) ·
+[CrewAI](docs/quickstarts/crewai.md) ·
+[Cursor](docs/quickstarts/cursor.md) ·
+[Dify](docs/quickstarts/dify.md) ·
+[Gemini CLI](docs/quickstarts/gemini-cli.md) ·
+[LangChain / LangGraph](docs/quickstarts/langchain.md) ·
+[n8n](docs/quickstarts/n8n.md) ·
+[OpenHands](docs/quickstarts/openhands.md) ·
+[Windsurf](docs/quickstarts/windsurf.md) ·
+[plain Python](docs/quickstarts/python.md) ·
+[shell / curl](docs/quickstarts/shell.md)
+
+Four ways in, one engine and one JSON contract:
+
+| interface | how |
 |---|---|
-| Formats | 9:16 1080x1920 · 16:9 1920x1080 · 1:1 1080x1080 · 4:5 1080x1350 · 30/60 fps · `--4k` |
-| Output | H.264 (yuv420p, BT.709) + AAC 48 kHz, `+faststart`, ready for Reels, TikTok, Shorts and X |
-| Audio | 5 procedural music styles and 20 synthesised SFX, auto-placed on cuts and hits, -14 LUFS / -1 dBTP |
-| Speed | A 12 s 1080x1920@30 clip renders in about 25 s on an 8-core machine (parallel, RAM-aware workers) |
-| Scenes | 27 scene types; any scene can be used in any mode |
+| MCP server | `kstudio-mcp` or `python -m kstudio.mcp_server`: stdio by default, streamable HTTP with `--http 8765`; tools `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (with progress), `audit` |
+| Function calling | strict tool schemas in [`docs/tools/`](docs/tools/README.md), dispatched with `kstudio.mcp_server.run_tool(name, arguments)` |
+| Command line | `kstudio --json <command>` prints one JSON object; stable exit codes (`kstudio exit-codes`) |
+| Skill | [`SKILL.md`](SKILL.md) (also at [`skills/kinetic-studio/`](skills/kinetic-studio/SKILL.md)): workflow, beat rules, spec contract, per-mode writing rules |
+
+For model readers: [`llms.txt`](llms.txt) and [`llms-full.txt`](llms-full.txt).
+
+## Features
+
+- **Five modes**, each with an example spec, theme, music style, camera feel and default
+  transition: `kinetic` (type teasers), `explainer`, `promo` (app and product launches), `data`
+  (counters and charts) and `social` (quotes and karaoke captions).
+- **31 scene types**, usable in any mode: slams, stacks, marquees, 3D type, scrambles, countdowns,
+  bursts; covers, definitions, diagrams, bullets, key facts; device mock-ups, feature lists, calls to
+  action, brand cards; counters, line, candlestick and bar charts, stat grids, tickers; hooks,
+  quotes, karaoke, follow cards; titles, text, images, logos, end cards. See [`docs/SCENES.md`](docs/SCENES.md).
+- **Beat-locked timing**: lengths and times in beats and bars (`"4b"`, `"1/2b"`, `"bar3"`) or named
+  markers with offsets (`"drop-2b"`); sections with energy 0-3 drive music layers and camera;
+  `snap` puts seconds on the grid; tempo and downbeat are detected from your own music file.
+- **13 transitions** with beat-length windows and their own sounds: cut, flash, cross, dissolve,
+  whip, push, zoom, squash, wipe (rect, circle, diagonal, type), slice, split and `match`, which
+  hands a shared element from one scene to the next.
+- **Film look**: 2.5D camera with parallax and continuity across cuts, a 12-column layout grid and
+  type scale, linear-light motion blur, per-theme colour grade, bloom, vignette and grain.
+- **Sound**: five procedural music styles (`drive`, `calm`, `bright`, `pulse`, `lofi`) and 29
+  synthesised sound effects placed on cuts and hits; ducking, -14 LUFS and a -1 dBTP true-peak limiter.
+- **Output**: 9:16, 16:9, 1:1 and 4:5 presets, 24-60 fps, `--4k`; H.264 High (yuv420p, BT.709) with
+  AAC 48 kHz and `+faststart`.
+- **Rendering**: deterministic, parallel, RAM-aware workers; 2-second chunks that resume after an
+  interruption. A 15-second 1080x1920 reel takes about 1-3 minutes at standard quality on a 10-core
+  laptop; previews (stills and a contact sheet) take seconds.
+- **Audit** of every render: codec, frame rate, frame count, duration, motion ratio, longest hold,
+  black frames, loudness, true peak and A/V gap, with per-mode thresholds.
+- **Agent-ready contract**: a JSON Schema generated from the engine, validation errors with JSON
+  Pointer paths and fix hints, a repair prompt, and `kstudio brief` to build a prompt pack for any model.
 
 ## How it works
 
 ```mermaid
 flowchart LR
     B[Brief] -->|agent or you| S[spec.json]
-    S --> T[Timeline<br/>markers · beat grid · sections]
-    T --> F[Film<br/>27 scene types + transitions]
-    F --> R[Parallel renderer<br/>Skia · motion blur · bloom · grain]
+    S --> V[Schema validation<br/>paths · hints]
+    V --> T[Timeline<br/>markers · beat grid · sections]
+    T --> F[Film<br/>31 scene types · 13 transitions · camera]
+    F --> R[Parallel renderer<br/>Skia · motion blur · grade · grain]
     R --> C[libx264 chunks<br/>verified + resumable]
     T --> A[Audio<br/>procedural music + SFX]
     A --> M[Mix<br/>ducking · -14 LUFS · true-peak limiter]
     C --> X[Mux + faststart]
     M --> X
     X --> Q[Audit<br/>codec · motion · loudness]
-    Q --> O[(final.mp4 + report.json)]
+    Q --> O[(video.mp4 + report.json)]
 ```
 
-Timeline markers drive everything: sections (with energy 0–3), cues, captions, sources, SFX and
-hits. Times can be seconds, beats (`4b`), bars (`bar3`) or expressions on named markers
-(`drop-2b`). Music, camera energy, flashes and sound all read the same timeline, so picture and
-sound stay locked. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Timeline markers drive everything: sections (with energy), cues, captions, sources, sound effects
+and hits. Music, camera energy, flashes and sound all read the same timeline, so picture and sound
+stay locked. Module map: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Install
 
-Requirements: Python 3.10+, and FFmpeg with libx264 (`ffmpeg` and `ffprobe` on PATH). On minimal Linux also install `libegl1 libgl1` (needed by skia-python). Runs on
-Linux or macOS (Windows via WSL); 4 GB free RAM is recommended.
+Requirements: Python 3.10+ and FFmpeg with libx264 (`ffmpeg` and `ffprobe` on PATH). On minimal
+Linux also install `libegl1 libgl1` (for skia-python). Linux or macOS (Windows via WSL2); 4 GB of
+free RAM recommended. `kstudio doctor` checks everything.
 
 ```bash
 git clone https://github.com/28naem-del/kinetic-studio.git
 cd kinetic-studio
-bash install.sh          # creates .venv, installs skia-python, numpy, opencv-python-headless
-bin/kstudio modes
+bash install.sh          # creates .venv; contributors: bash install.sh --dev
+bin/kstudio doctor
 ```
 
-You can also run `pip install .` to get a `kstudio` command on your PATH. Contributors should use
-`bash install.sh --dev` (adds pytest, ruff, mypy and pre-commit).
+`pip install .` puts `kstudio`, `kinetic-studio` and `kstudio-mcp` on your PATH.
 
-## Quickstart
-
-Every mode works the same way: `new` copies a working example, you edit the spec, `preview` shows
-stills in about a second, and `render` writes the MP4 and runs the audit.
-
-```bash
-bin/kstudio new <mode> my_video      # mode: kinetic | explainer | promo | data | social
-$EDITOR my_video/spec.json           # change the words, numbers, colours
-bin/kstudio preview my_video         # stills + contact sheet in ~1 s
-bin/kstudio render my_video          # -> my_video/out/my_video_reel.mp4 (+ audit report)
-```
-
-<details>
-<summary><b>kinetic</b>: beat-synced type teaser</summary>
-
-```jsonc
-{
-  "mode": "kinetic",
-  "music": { "style": "drive", "bpm": 128 },
-  "markers": [ { "kind": "section", "at": "drop", "name": "drop", "energy": 3 } ],
-  "scenes": [
-    { "type": "slam", "words": ["STOP", "SCROLLING"], "dur": "2b" },
-    { "type": "type3d", "text": "LAUNCH", "dur": "4b" },
-    { "type": "burst", "id": "drop", "text": "NOW", "dur": "4b", "transition": "flash" }
-  ]
-}
-```
-</details>
-
-<details>
-<summary><b>explainer</b>: education with diagrams and sources</summary>
-
-```bash
-bin/kstudio new explainer cache_explainer
-bin/kstudio render cache_explainer
-```
-Uses `title`, `definition`, `diagram` (nodes, edges, callouts), `bullets` and `end_card`.
-Add a `source` marker to show a citation lower-third. See [`examples/explainer/spec.json`](examples/explainer/spec.json).
-</details>
-
-<details>
-<summary><b>promo</b>: product / app promo</summary>
-
-```bash
-bin/kstudio new promo my_app
-# set the "device" scene's "screen" key to your screenshot path
-bin/kstudio render my_app --preset landscape
-```
-Uses `device`, `features`, `cta` and `logo`. See [`examples/promo/spec.json`](examples/promo/spec.json).
-</details>
-
-<details>
-<summary><b>data</b>: stats / dashboard story</summary>
-
-```bash
-bin/kstudio new data weekly_stats
-bin/kstudio render weekly_stats --fps 60
-```
-Uses `counter`, `candles`, `bars`, `line` and `ticker`. The example numbers are illustrative; label real data with its source.
-</details>
-
-<details>
-<summary><b>social</b>: quote and karaoke captions</summary>
-
-```bash
-bin/kstudio new social quote_clip
-bin/kstudio render quote_clip --preset square
-```
-Uses `quote` and `karaoke` (word-timed captions with an active-word pill). Drop in `music.file` to use your own track; its tempo and beats are detected automatically.
-</details>
-
-## CLI reference
+## Command line
 
 | command | what it does |
 |---|---|
-| `kstudio modes` | list modes with their default theme, music style/BPM and transition |
-| `kstudio scenes [-v] [type]` | list scene types and their parameters ([`docs/SCENES.md`](docs/SCENES.md)) |
-| `kstudio new <mode> <dir> [--force]` | start a project from a mode example |
-| `kstudio info <spec> [--json]` | validate and print the resolved timeline |
-| `kstudio preview <spec> [--at T] [--preset P] [--scale S]` | render stills and a contact sheet |
-| `kstudio render <spec> [-o OUT] [--preset P] [--fps N] [--quality draft\|standard\|high] [--4k] [--workers N] [--fresh] [--no-audit]` | render the final MP4 (parallel, resumable) |
-| `kstudio audit <video> [--mode M] [--json]` | audit a finished video |
-| `kstudio mix <spec> [-o OUT]` | render the soundtrack only |
-| `kstudio beats <audio>` | detect a music file's tempo and beat phase |
-| `kstudio sfx <dir>` | export the synthesised SFX kit as WAVs |
+| `kstudio modes` | modes with their theme, music style and tempo, and transition |
+| `kstudio scenes [-v] [type]` | scene types and their parameters |
+| `kstudio new <mode> <dir> [--force]` | start a project from a mode's example |
+| `kstudio schema [--mode M] [--types T]` | the spec JSON Schema |
+| `kstudio validate <spec>` | schema check and dry build; errors with JSON Pointer paths |
+| `kstudio brief "<brief>" [--mode M]` | prompt pack to turn a brief into a spec with any model |
+| `kstudio info <spec>` | resolved timeline and beat-grid lint |
+| `kstudio preview <spec> [--at T] [--preset P] [--scale S]` | stills and a contact sheet |
+| `kstudio render <spec> [-o OUT] [--preset P] [--fps N] [--quality draft\|standard\|high] [--4k] [--workers N] [--fresh] [--snap] [--no-audit]` | the final MP4 (parallel, resumable, audited) |
+| `kstudio audit <video> [--mode M]` | audit any finished video |
+| `kstudio mix <spec>` · `beats <audio>` · `sfx <dir>` | soundtrack only · tempo detection · export the sound kit |
+| `kstudio doctor` · `exit-codes` | check dependencies · print the exit-code table |
 
-`<spec>` can be a project folder or a `spec.json` path. Presets: `reel` (9:16), `landscape` (16:9),
-`square` (1:1), `portrait` (4:5). Set `KSTUDIO_WORKERS` to fix the worker count.
+`<spec>` is a project folder or a `spec.json`. Add `--json` to any command for one JSON object on
+stdout ([`docs/CLI.md`](docs/CLI.md)). Presets: `reel`/`story` (9:16), `landscape`/`youtube` (16:9), `square` (1:1), `portrait` (4:5).
 
-## Use it as an agent skill
+## Docs
 
-Kinetic Studio works as a skill for Grok Bot, Claude, Cursor and other agents. Put this folder
-where your agent loads skills (or point it at [`SKILL.md`](SKILL.md)). The skill tells the agent
-how to choose a mode, turn a brief into a spec, preview, render and read the audit. It also
-includes wording rules for health and finance content. [`plugin.json`](plugin.json) describes the
-entrypoint, install step and commands for plugin-style loaders.
-
-Example prompt: *"Make a 12-second vertical teaser for our launch on Friday, words: STOP
-SCROLLING / MEET NOVA / SHIP FASTER."*
+| | |
+|---|---|
+| [Quickstarts](docs/quickstarts/README.md) | one page per agent framework |
+| [Skill](SKILL.md) | how an agent should go from brief to video |
+| [Scene reference](docs/SCENES.md) | every scene, parameter and default; shared keys; transitions |
+| [Command line](docs/CLI.md) | every command, its JSON output and exit codes |
+| [Tool definitions](docs/tools/README.md) | MCP list, function-calling schemas, manifest |
+| [Architecture](docs/ARCHITECTURE.md) | modules and pipeline |
+| [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) | |
 
 ## FAQ
 
-**Does it need a GPU or any API key?** No. It renders on the CPU with Skia and FFmpeg and never
-calls a network service.
+**Does it need a GPU or an API key?** No. It renders on the CPU with Skia and FFmpeg and makes no
+network calls. The MCP server uses only the Python standard library.
 
-**Can I use my own music?** Yes. Set `"music": {"file": "track.mp3"}`. The tempo and beat phase
-are detected so beat-measured scenes land on the beat. You are responsible for the track's rights.
+**Can I use my own music?** Yes: `"music": {"file": "track.mp3"}`. Tempo and beat phase are
+detected so beat-measured scenes land on the beat. You are responsible for the track's rights.
 
-**Is the generated music royalty-free?** The procedural music and SFX are synthesised by this
+**Is the generated music royalty-free?** The music and sound effects are synthesised by this
 project's code at render time; no samples are bundled.
 
-**A render crashed or I pressed Ctrl-C.** Re-run the same command; finished chunks are kept and
-rendering resumes. Use `--fresh` to start over.
-
-**Why does the audit flag black frames on the data demo?** The terminal theme is intentionally
-dark; the audit reports it but the checks still pass.
+**A render stopped halfway.** Run the same command again; finished chunks are reused. `--fresh`
+starts over.
 
 **Windows?** Use WSL2 with FFmpeg installed inside it.
-
-## Roadmap
-
-- [ ] `pip` package on PyPI
-- [ ] Subtitle import (SRT/VTT) for karaoke scenes
-- [ ] More themes and a theme gallery
-- [ ] Lottie/SVG asset scene
-- [ ] Optional hardware encoders (VideoToolbox, NVENC)
-- [ ] Web preview of the timeline
-
-Ideas and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Responsible use
 
 The explainer mode is built for education. For health topics, describe what is *studied*, never
 dosing or claims, and keep the "For learning only. Not medical advice." end card. Data examples
-are illustrative; label them as such. You are responsible for the text and any media you add.
+are illustrative; label them as such. You are responsible for the text and any media you add, and
+for what you publish.
 
-## Credits
+## Credits and third-party notices
 
 Inspired by Scenario's kinetic-film skill; original implementation, no shared code.
-
-Fonts: Archivo, Inter, Fraunces, JetBrains Mono and Space Grotesk (SIL OFL 1.1). See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Fonts: Archivo, Inter, Fraunces, JetBrains Mono and Space Grotesk (SIL OFL 1.1). FFmpeg is an
+external tool you install separately. Full list: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Licence
 
-[MIT](LICENSE) © 2026 Naem / Aristotle Intelligence. Bundled fonts are SIL OFL 1.1; FFmpeg is an
-external tool you install separately.
+[MIT](LICENSE) © 2026 Naem / Aristotle Intelligence.
