@@ -14,7 +14,11 @@ Spec forms (on the incoming scene):
 Kinds (default beats): cut 0 | flash 0 (cut + 2-frame accent flash) | cross 1 (exit 0.5b
 in_quart, enter 0.5b out_expo; "fade" is an alias) | dissolve 1 (plain alpha crossfade, opt-in)
 | whip 1/2 | push 3/4 | zoom 3/4 | squash 1/2 | wipe 1 (rect, circle, diagonal, type) |
-slice 1 (n bands) | split 3/4 (two halves open) | match 0 (element hand-off; "morph" beats).
+slice 1/4 (n bands) | split 3/4 (two halves open) | match 0 (element hand-off; "morph" beats).
+
+Streak accents are hits, not passages: a slice window is capped at 1/4 beat or STREAK_FRAMES
+frames, whichever is shorter (any "dur" is clamped), and the whip's speed lines are drawn only
+inside the same span around the cut.
 """
 from __future__ import annotations
 
@@ -44,7 +48,7 @@ TRANSITIONS: dict[str, dict[str, Any]] = {
     "zoom": {"beats": 0.75, "anchor": 0.5, "shutter": 2.5, "sfx": "whoosh"},
     "squash": {"beats": 0.5, "anchor": 0.5, "shutter": 2.0, "sfx": "swish"},
     "wipe": {"beats": 1.0, "anchor": 0.5, "shutter": 1.5, "sfx": "swish"},
-    "slice": {"beats": 1.0, "anchor": 0.5, "shutter": 2.0, "sfx": "swish"},
+    "slice": {"beats": 0.25, "anchor": 0.5, "shutter": 2.0, "sfx": "swish", "max_beats": 0.25, "max_frames": 3},
     "split": {"beats": 0.75, "anchor": 0.5, "shutter": 2.0, "sfx": "swish"},
     "match": {"beats": 0.0, "anchor": 0.0, "shutter": 1.0, "sfx": None},
 }
@@ -55,6 +59,8 @@ WIPE_SHAPES = ("rect", "circle", "diagonal", "type")
 # kinds across which a published element is handed to the next scene (others: opt in with "handoff": true)
 HANDOFF_KINDS = ("match", "cut", "flash", "cross", "fade", "dissolve")
 FLASH_ALPHA = (0.74, 0.64)   # first / second frame: accent tint at 60-80 % over the frame
+STREAK_FRAMES = 3            # longest streak accent (slice window, whip speed lines), in frames
+STREAK_BEATS = 0.25          # ... and in beats; the shorter of the two applies
 
 
 def _h(i: int, seed: int) -> float:
@@ -153,11 +159,24 @@ def _draw_dissolve(film: Film, c: skia.Canvas, b: Boundary, p: float, t: float) 
     c.restore()
 
 
-def _streaks(film: Film, c: skia.Canvas, b: Boundary, p: float, seam: float, horizontal: bool) -> None:
-    """Directional speed streaks around the seam (deterministic per boundary)."""
+def streak_half(film: Film, cut: float) -> float:
+    """Half the streak-accent span (s) around a cut: the whole span is at most STREAK_BEATS beats
+    or STREAK_FRAMES frames, whichever is shorter."""
+    tl = film.tl
+    beat = tl.beat_to_time(tl.time_to_beat(cut) + STREAK_BEATS) - cut
+    return 0.5 * min(beat, STREAK_FRAMES / max(float(film.fps), 1.0))
+
+
+def _streaks(film: Film, c: skia.Canvas, b: Boundary, p: float, seam: float, horizontal: bool,
+             t: float | None = None) -> None:
+    """Directional speed streaks around the seam (deterministic per boundary), only within
+    streak_half() of the cut, peaking on it."""
     W, H = film.W, film.H
     s = min(W, H) / 1080.0
     k = math.sin(math.pi * E.clamp(p))
+    if t is not None:
+        half = streak_half(film, float(b.t))
+        k = math.cos(0.5 * math.pi * min(abs(t - float(b.t)) / max(half, 1e-6), 1.0))
     if k < 0.05:
         return
     cols = [film.pal("accent", 0.55 * k), film.pal("ink", 0.35 * k), film.pal("accent2", 0.4 * k)]
@@ -198,7 +217,7 @@ def _draw_whip(film: Film, c: skia.Canvas, b: Boundary, p: float, t: float) -> N
     c.restore()
     horizontal = dx != 0
     seam = (W / 2 + dx * W * (eb - 0.5)) if horizontal else (H / 2 + dy * H * (eb - 0.5))
-    _streaks(film, c, b, p, seam, horizontal)
+    _streaks(film, c, b, p, seam, horizontal, t)
     c.restore()
 
 

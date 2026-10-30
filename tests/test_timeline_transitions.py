@@ -129,7 +129,14 @@ def test_every_cut_and_window_edge_on_grid(kind):
     b = film.boundaries[0]
     tl = film.tl
     assert abs(tl.grid_error(b.t)) < 1e-3                      # cut on a beat
-    assert abs(tl.grid_error(b.t0, 8)) < 1e-3 and abs(tl.grid_error(b.t1, 8)) < 1e-3   # 32nd grid
+    if TRANSITIONS[kind].get("max_frames"):
+        # streak accents (slice) are frame-capped: <= min(1/4 beat, max_frames) centred on the cut, so
+        # below 150 BPM their edges sit off the 32nd grid by design
+        quarter = tl.beat_to_time(tl.time_to_beat(b.t) + 0.25) - b.t
+        assert b.dur <= min(quarter, TRANSITIONS[kind]["max_frames"] / film.fps) + 1e-6
+        assert b.t - b.t0 == pytest.approx(b.t1 - b.t)
+    else:
+        assert abs(tl.grid_error(b.t0, 8)) < 1e-3 and abs(tl.grid_error(b.t1, 8)) < 1e-3   # 32nd grid
     assert b.t0 <= b.t <= b.t1
     assert b.dur == pytest.approx(b.t1 - b.t0)
 

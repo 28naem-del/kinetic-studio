@@ -23,6 +23,11 @@ Motion blur (``frame_linear``)
          Static pixels have a zero vector and stay sharp. ``unresolved`` counts frames where a
          step was longer than the smear may close (copies could remain); ``undersampled`` counts
          strata whose middle sub-frame was not the blend of its neighbours (flow under-read).
+    The shutter never integrates across a hard cut: sample times are clamped to the shot that
+    owns the frame (``film.shot_bounds``), so the first frame after a cut carries none of the
+    outgoing scene and the last frame before it none of the incoming one, and no flow or smear
+    is ever computed between two scenes. Frames under an accent flash (opacity >= 0.5) keep the
+    base strata and skip the flow refinement and the smear (``flash_frames``).
 
     Flashes (``film.flash_at``) are applied once per delivered frame, after the blur, so a 2-frame
     flash is exactly 2 frames at every shutter. Grain and dither are re-seeded per frame from
@@ -58,6 +63,8 @@ _MID_TOL = 8             # max |mid - mean(ends)| (8-bit codes, 1/8 res) for a f
 _FILL_PX = 3.0           # residual spacing above this (sample cap reached) is closed by the vector smear
 _SMEAR_MAX = 480.0       # longest step (px at 1080) the smear may close; longer counts as unresolved
 _SMEAR_SPAN = 1.5      # smear length in steps: > 1 so neighbouring copies overlap where the flow field is coarse
+_CUT_EPS = 1e-5          # s: the last sample before a hard cut sits this far before it
+_FLASH_VEIL = 0.5        # flash opacity from which a frame skips flow refinement and the smear
 _FIELD_CACHE: dict[tuple, tuple[list[np.ndarray], np.ndarray]] = {}
 
 
@@ -141,7 +148,9 @@ class Compositor:
         self._grid_xy: tuple[np.ndarray, np.ndarray] | None = None
         self.stats: dict[str, Any] = {"samples": 0, "frames": 0, "adaptive_skips": 0,
                                       "slow_frames": 0, "refined_frames": 0, "gap_filled": 0, "unresolved": 0,
-                                      "undersampled": 0, "max_samples": 0, "max_step_px": 0.0}
+                                      "undersampled": 0, "max_samples": 0, "max_step_px": 0.0,
+                                      "flash_frames": 0}
+        self._shot: tuple[float, float] = (-math.inf, math.inf)
 
     # ------------------------------------------------------------------ setup
     def _vignette_strength(self) -> float:
@@ -249,12 +258,21 @@ class Compositor:
         px = float(np.percentile(m, 98)) if m.size >= 4 else 4.0
         return px * (self.W / self._sw)
 
+    def _flash_alpha(self, i: int) -> float:
+        """Opacity of the accent flash the compositor lays over delivered frame i (0 if none)."""
+        flash = getattr(self.film, "flash_at", None)
+        if flash is None or not getattr(self.film, "defer_flash", False):
+            return 0.0
+        return float(flash(i)[1])
+
     @staticmethod
     def _tent(u: float) -> float:
         return 0.5 + 0.5 * math.sin(math.pi * min(max(u, 0.0), 1.0))
 
     def _time(self, t: float, span: float, u: float) -> float:
-        return min(max(t + (u - 0.5) * span, 0.0), max(self.film.duration - 1e-4, 0.0))
+        lo, hi = self._shot
+        tt = min(max(t + (u - 0.5) * span, lo), hi)
+        return min(max(tt, 0.0), max(self.film.duration - 1e-4, 0.0))
 
     def frame_linear(self, i: int) -> np.ndarray:
         """Motion-blurred frame i in linear light (float32 RGB; aliases self.acc when blurred)."""
@@ -264,6 +282,10 @@ class Compositor:
         mult = self.film.shutter_mult(t)
         span = self.out.shutter / 360.0 / fps * mult
         st = self.stats
+        # the shutter never straddles a hard cut: samples are clamped to the shot that owns t
+        bounds = getattr(self.film, "shot_bounds", None)
+        lo, hi = bounds(t) if bounds is not None else (-math.inf, math.inf)
+        self._shot = (lo, hi - _CUT_EPS if hi < math.inf else hi)
         if n <= 1 or span <= 0:
             rgb, _ = self._sample_rgb(t)
             st["max_samples"] = max(st["max_samples"], 1)
@@ -281,6 +303,13 @@ class Compositor:
         if int(cv2.absdiff(sa, sb).max()) <= _STATIC_TOL:
             st["adaptive_skips"] += 1
             return self._finish([(rgbs[0], 0.5), (rgbs[-1], 0.5)], 2)
+        if self._flash_alpha(i) >= _FLASH_VEIL:
+            # under a 64-74 % accent flash the motion reads only as a tint: the base strata,
+            # no flow-driven subdivision and no vector smear (nothing to resolve under the veil)
+            st["flash_frames"] += 1
+            for k in range(1, n - 1):
+                rgbs[k], _ = self._sample_rgb(self._time(t, span, us[k]))
+            return self._finish([(rgbs[k], self._tent(us[k]) / n) for k in range(n)], n)
         km = n // 2
         rgbs[km], smalls[km] = self._sample_rgb(self._time(t, span, us[km]))
         # slow: small flow AND the middle sub-frame is explained by blending the ends (this also

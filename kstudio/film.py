@@ -229,6 +229,11 @@ class Film:
             beats = round(self.tl.beats_of(float(self.tl.resolve_dur(d, cut)), cut) * 4) / 4
             if float(self.tl.resolve_dur(d, cut)) > 0 and beats == 0:
                 beats = 0.25
+        if beats and "max_beats" in reg:  # accent transitions (slice): the streak stays a hit, not a passage
+            cap = float(reg["max_beats"])
+            if reg.get("max_frames"):
+                cap = min(cap, self.tl.beats_of(float(reg["max_frames"]) / self.fps, cut))
+            beats = min(beats, cap)
         anchor = float(tparams.get("anchor", reg["anchor"]))
         cb = self.tl.time_to_beat(cut)
         t0 = self.tl.beat_to_time(cb - anchor * beats) if beats else cut
@@ -304,6 +309,20 @@ class Film:
             if b.dur > 0 and b.t0 <= t < b.t1:  # type: ignore[operator]
                 return b, (t - b.t0) / b.dur  # type: ignore[operator]
         return None
+
+    def shot_bounds(self, t: float) -> tuple[float, float]:
+        """[lo, hi) between the hard cuts (zero-length boundaries: cut, flash, match without a morph)
+        around film time t. The shutter integrates only this span, so a frame never blends the scene
+        on the other side of a hard cut; t on a cut belongs to the incoming scene, as in scene_at."""
+        lo, hi = -math.inf, math.inf
+        for b in self.boundaries:
+            if b.dur > 0:
+                continue
+            if b.t <= t + 1e-9:
+                lo = max(lo, b.t)
+            else:
+                hi = min(hi, b.t)
+        return lo, hi
 
     def shutter_mult(self, t: float) -> float:
         bt = self.boundary_at(t)
