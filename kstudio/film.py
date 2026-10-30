@@ -98,6 +98,9 @@ class Film:
         self.theme = resolve_theme(theme_name, spec.get("theme_overrides"))
         self.pal = D.Palette(self.theme)
         self.handle = spec.get("handle", "")
+        # the Compositor sets this: it applies flashes once per delivered frame, after motion blur,
+        # so they stay exactly 1-2 frames long at every shutter; a bare Film.draw draws them itself
+        self.defer_flash = False
         self.show_progress = bool(spec.get("progress", False))
         music = self.cfg.get("music", {})
         if "bpm" in spec:
@@ -421,17 +424,25 @@ class Film:
             draw_handle(ctx, self.handle)
         if self.show_progress:
             draw_progress(ctx, t / max(self.duration, 1e-3))
-        # flashes: at most 2 frames, accent-tinted at 60-80 % (never a paper/white frame)
+        if not self.defer_flash:
+            rgb, fl = self.flash_at(int(math.floor(t * self.fps + 0.5 + 1e-9)))
+            if fl > 0.002:
+                c.drawRect(skia.Rect(0, 0, self.W, self.H), D.paint(D.argb(rgb, fl)))
+
+    def flash_at(self, i: int) -> tuple[tuple[int, int, int], float]:
+        """Accent flash for delivered frame i: (rgb, opacity). Flash cuts and hit markers with a
+        flash light exactly 2 whole frames (1 for light hits, flash < 0.3) from the first frame at
+        or after the cut, at 60-80 % accent (never a white/paper frame)."""
         fl = 0.0
         for b in self.boundaries:
             if b.kind == "flash" or b.params.get("flash"):
-                fl = max(fl, TR.flash_alpha(b.t, t, self.fps))
+                fl = max(fl, TR.flash_frame_alpha(b.t, i, self.fps))
+        t = i / self.fps
         for m in self.tl.of("hit"):
             f = float(m.data.get("flash", 0.0))
-            if f > 0 and -0.1 <= t - m.t < 0.1:
-                fl = max(fl, TR.flash_alpha(m.t, t, self.fps, 2 if f >= 0.3 else 1))
-        if fl > 0.002:
-            c.drawRect(skia.Rect(0, 0, self.W, self.H), D.paint(self.pal(self.theme.get("flash", "accent"), fl)))
+            if f > 0 and -0.2 <= t - m.t < 0.2:
+                fl = max(fl, TR.flash_frame_alpha(m.t, i, self.fps, 2 if f >= 0.3 else 1))
+        return self.pal.rgb(self.theme.get("flash", "accent")), fl
 
     # ------------------------------------------------------------------ info
     def summary(self) -> dict[str, Any]:

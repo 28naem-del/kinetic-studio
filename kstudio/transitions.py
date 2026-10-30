@@ -54,7 +54,7 @@ DIRS = {"left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1)}
 WIPE_SHAPES = ("rect", "circle", "diagonal", "type")
 # kinds across which a published element is handed to the next scene (others: opt in with "handoff": true)
 HANDOFF_KINDS = ("match", "cut", "flash", "cross", "fade", "dissolve")
-FLASH_ALPHA = (0.75, 0.62)   # first / second frame, accent tint
+FLASH_ALPHA = (0.74, 0.64)   # first / second frame: accent tint at 60-80 % over the frame
 
 
 def _h(i: int, seed: int) -> float:
@@ -464,9 +464,22 @@ DRAW: dict[str, Callable[..., None]] = {
 }
 
 
+def flash_first_frame(cut: float, fps: float) -> int:
+    """Index of the first output frame at or after the cut (the flash's first frame)."""
+    return int(math.ceil(cut * fps - 1e-6))
+
+
+def flash_frame_alpha(cut: float, i: int, fps: float, frames: int = 2) -> float:
+    """Accent flash opacity for whole output frame i: exactly `frames` frames starting at the first
+    frame at or after the cut, 0 elsewhere. Evaluated once per delivered frame (the compositor
+    applies it after motion blur), so a wide shutter can never smear it into a third frame."""
+    k = int(i) - flash_first_frame(cut, fps)
+    if 0 <= k < frames:
+        return FLASH_ALPHA[min(k, len(FLASH_ALPHA) - 1)]
+    return 0.0
+
+
 def flash_alpha(cut: float, t: float, fps: float, frames: int = 2) -> float:
-    """Accent flash opacity at sample time t: frame 1 and 2 after the cut only (0 elsewhere)."""
-    f = (t - cut) * fps
-    if f < -0.5 or f >= frames - 0.5:
-        return 0.0
-    return FLASH_ALPHA[0] if f < 0.5 else FLASH_ALPHA[1]
+    """Accent flash opacity at time t, quantised to the output frame t falls on (frame i covers
+    [i - 0.5, i + 0.5) / fps), so it is the same for every sub-sample of a frame."""
+    return flash_frame_alpha(cut, int(math.floor(t * fps + 0.5 + 1e-9)), fps, frames)

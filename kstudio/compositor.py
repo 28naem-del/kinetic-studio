@@ -67,6 +67,13 @@ def _theme_name(film: Film) -> str | None:
     return th if isinstance(th, str) else None
 
 
+def spec_seed(film: Film) -> int:
+    """32-bit seed from the film's spec (private "_" keys excluded): grain and sample jitter are
+    a function of (frame index, spec), so every render of a spec is bit-identical."""
+    from .spec import spec_hash
+    return int(spec_hash(getattr(film, "spec", {}) or {})[:8], 16)
+
+
 def _hash32(*xs: int) -> int:
     h = 0x811C9DC5
     for x in xs:
@@ -78,11 +85,11 @@ def _hash32(*xs: int) -> int:
 
 
 class Compositor:
-    def __init__(self, film: Film, out: Output, post: dict | None = None, seed: int = 1,
+    def __init__(self, film: Film, out: Output, post: dict | None = None, seed: int | None = None,
                  grade: Any = None):
         """``grade``: a kstudio.grade preset name, dict, Grade or False; by default the
         compositor uses ``post["grade"]``, then ``theme["grade"]``, then the preset named after
-        the theme, then "neutral"."""
+        the theme, then "neutral". ``seed``: grain/jitter seed; default derived from the spec."""
         self.film, self.out = film, out
         self.W, self.H = out.width, out.height
         self.post = dict(film.cfg.get("post", {}))
@@ -91,7 +98,9 @@ class Compositor:
         theme = getattr(film, "theme", {}) or {}
         gspec = grade if grade is not None else self.post.get("grade", theme.get("grade"))
         self.grade = G.resolve_grade(gspec, theme=_theme_name(film))
-        self.seed = int(seed)
+        self.seed = int(seed) if seed is not None else spec_seed(film)
+        if hasattr(film, "defer_flash"):
+            film.defer_flash = True  # flashes are applied per delivered frame in _post_linear
         self.rgba = np.zeros((self.H, self.W, 4), np.uint8)
         self.surface = skia.Surface(self.rgba)
         self.canvas = self.surface.getCanvas()
@@ -151,12 +160,18 @@ class Compositor:
         self.vig = cv2.merge([(lin * (255.0 * 255.0 / G.LIN_MAX)).astype(np.float32)] * 3)
 
     def _build_textures(self) -> None:
+        self.pad = 64
+        want = float(self.post.get("grain", self.grade.grain or 0.0)) > 0
+        key = (self.W, self.H, self.seed, want)
+        if key in _FIELD_CACHE:  # one build per process (tests / previews make many compositors)
+            self.grain_fields, self.dither = _FIELD_CACHE[key]
+            self.grain = self.grain_fields[0] if self.grain_fields else None
+            return
         rng = np.random.default_rng(self.seed)
         s = self.s
-        self.pad = 64
         gh, gw = self.H + self.pad, self.W + self.pad
         self.grain_fields: list[np.ndarray] = []
-        if float(self.post.get("grain", self.grade.grain or 0.0)) > 0:
+        if want:
             for _ in range(4):
                 # a strong coarse (~2-3 px) layer: film-like clumps that also survive x264 at delivery
                 # bitrates, so the grain keeps dithering dark gradients after encode (pure 1 px noise is
@@ -169,6 +184,8 @@ class Compositor:
         self.dither = ((rng.random((gh, gw), dtype=np.float32) + rng.random((gh, gw), dtype=np.float32) - 1.0)
                        * (1.0 / 255.0)).astype(np.float32)
         self.grain = self.grain_fields[0] if self.grain_fields else None  # v0.1 attribute name
+        _FIELD_CACHE.clear()
+        _FIELD_CACHE[key] = (self.grain_fields, self.dither)
 
     def _field(self, base: np.ndarray, i: int, salt: int, dst: np.ndarray) -> np.ndarray:
         """Frame i's view of a texture: random offset + one of 4 flips (no sliding pattern)."""
@@ -511,13 +528,23 @@ class Compositor:
             disp = cv2.transform(disp, self._sat, dst=self._b1)
         gr = float(p.get("grain", self.grade.grain or 0.0))
         use_grain = gr > 0 and bool(self.grain_fields)
-        if self._split is not None or use_grain:
+        L8 = None
+        if self._split is not None:
             L8 = cv2.convertScaleAbs(cv2.transform(disp, self._luma, dst=self._m1), dst=self._u1, alpha=255.0)
-            if self._split is not None:
-                cv2.add(disp, cv2.LUT(cv2.merge([L8, L8, L8], dst=self._u3b), self._split, dst=self._b2), dst=disp)
+            cv2.add(disp, cv2.LUT(cv2.merge([L8, L8, L8], dst=self._u3b), self._split, dst=self._b2), dst=disp)
+        flash = getattr(self.film, "flash_at", None)
+        if flash is not None and getattr(self.film, "defer_flash", False):
+            rgb, fa = flash(i)
+            if fa > 0.002:  # accent tint over the whole delivered frame (display space, ungraded)
+                disp *= np.float32(1.0 - fa)
+                disp += (np.asarray(rgb, np.float32) * np.float32(fa / 255.0)).reshape(1, 1, 3)
+                L8 = None
+        if use_grain and L8 is None:
+            L8 = cv2.convertScaleAbs(cv2.transform(disp, self._luma, dst=self._m1), dst=self._u1, alpha=255.0)
         noise = self._field(self.dither, i, 0xD17, self._m2) if p.get("dither", True) else None
         if use_grain:
-            field = self._field(self.grain_fields[i % len(self.grain_fields)], i, 0x6A1, self._m3)
+            pick = _hash32(i, 0x6A0, self.seed) % len(self.grain_fields)  # re-seeded per frame
+            field = self._field(self.grain_fields[pick], i, 0x6A1, self._m3)
             wl = cv2.LUT(L8, self._grain_w, dst=self._m1)
             g = cv2.multiply(field, wl, dst=self._m1, scale=gr * 0.5)
             noise = g if noise is None else cv2.add(g, noise, dst=self._m1)
