@@ -70,13 +70,35 @@ def plan_chunks(n_frames: int, fps: int, chunk_seconds: float = 2.0) -> list[tup
 
 # ---------------------------------------------------------------------- worker
 
+def cv_threads(workers: int, cores: int | None = None, load: float | None = None) -> int:
+    """OpenCV threads per render worker. OpenCV's default pool (every core, in every worker) costs
+    ~45% more CPU per frame than one thread and oversubscribes a machine that is already busy, so
+    a worker gets one thread unless cores are idle: then it takes its share of the idle cores
+    (wall time on an otherwise idle machine). ``load`` = 1-min load average before the workers
+    start; ``KSTUDIO_CV_THREADS`` overrides."""
+    env = os.environ.get("KSTUDIO_CV_THREADS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    cores = cores or os.cpu_count() or 2
+    if load is None:
+        try:
+            load = os.getloadavg()[0]
+        except (AttributeError, OSError):
+            load = float(cores)
+    idle = max(0.0, cores - load)
+    return max(1, min(cores // max(1, workers), int(idle // max(1, workers))))
+
+
 def _worker(wid: int, spec: dict, out_d: dict, grid: dict | None, post: dict | None, work_dir: str,
             tasks: mp.Queue, results: mp.Queue) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
-        try:  # one process per core already; OpenCV's own pool on top oversubscribes (~25% more CPU)
+        try:  # see cv_threads(): the parent picks the count before the workers start
             import cv2
-            cv2.setNumThreads(1)
+            cv2.setNumThreads(int(os.environ.get("KSTUDIO_CV_THREADS_RUN", "1") or 1))
         except Exception:  # noqa: BLE001
             pass
         from .beats import BeatGrid
@@ -187,6 +209,7 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
         for _ in range(workers):
             tasks.put(None)
         os.environ["KSTUDIO_WORKERS"] = str(workers)
+        os.environ["KSTUDIO_CV_THREADS_RUN"] = str(cv_threads(workers))
         procs = [ctx.Process(target=_worker, args=(w, spec, asdict(out), grid, post, work_dir, tasks, results),
                              daemon=True) for w in range(workers)]
         for proc in procs:

@@ -179,3 +179,12 @@ def test_promo_beat_springs_under_cap():
     from kstudio.scenes import promo
     s = E.Spring.settling(0.4, promo.BEAT_BOUNCE)
     assert _peak(lambda u: s.value(u * 2.0)) <= 1.04
+
+
+def test_cv_threads_one_per_worker_unless_cores_idle(monkeypatch):
+    monkeypatch.delenv("KSTUDIO_CV_THREADS", raising=False)
+    assert RD.cv_threads(3, cores=10, load=20.0) == 1   # busy machine: no oversubscription
+    assert RD.cv_threads(3, cores=10, load=0.5) == 3    # idle: the worker's share of the cores
+    assert RD.cv_threads(3, cores=10, load=5.0) == 1
+    monkeypatch.setenv("KSTUDIO_CV_THREADS", "2")
+    assert RD.cv_threads(3, cores=10, load=20.0) == 2
