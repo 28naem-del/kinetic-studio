@@ -44,6 +44,9 @@ def _shade(shader: skia.Shader, blur: float = 0.0) -> skia.Paint:
     return D.paint(OPAQUE, shader=shader, blur=blur)
 
 
+BEAT_BOUNCE = 0.28  # beat pulse / press springs: 3.8 % overshoot, under the 4 % house cap (0.3 was 4.6 %)
+
+
 @lru_cache(maxsize=64)
 def _spring(settle: float, bounce: float) -> E.Spring:
     return E.Spring.settling(max(settle, 0.05), bounce)
@@ -705,11 +708,11 @@ class CTA(Scene):
                 if dt < fr:
                     pulse = E.clamp(dt / fr)
                 else:
-                    pulse = 1.0 - _spring(0.8 * bl, 0.3).value(dt - fr)
+                    pulse = 1.0 - _spring(0.8 * bl, BEAT_BOUNCE).value(dt - fr)
             press = 0.0
             if tap - 2 * ctx.frame <= lt:
                 d = lt - tap
-                press = E.clamp((d + 2 * ctx.frame) / (2 * ctx.frame)) if d < 0 else 1.0 - _spring(0.75 * bl, 0.3).value(d)
+                press = E.clamp((d + 2 * ctx.frame) / (2 * ctx.frame)) if d < 0 else 1.0 - _spring(0.75 * bl, BEAT_BOUNCE).value(d)
             k = e * (1 + float(self.p["pulse"]) * pulse) * (1 - 0.06 * press)
             bx, by, bw, bh = br_.left(), br_.top(), br_.width(), br_.height()
             bcx, bcy = br_.centerX(), br_.centerY()
