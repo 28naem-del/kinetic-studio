@@ -185,7 +185,9 @@ def test_motion_blur_is_continuous_at_high_speed():
         cur = 0 if lit else cur + 1
         runs.append(cur)
     assert max(runs) <= 4
-    assert comp.stats["unresolved"] >= 1 and comp.stats["max_samples"] >= 24
+    # the sampler refines up to its cap (the smear pass would close any step left over)
+    assert comp.stats["max_samples"] >= 24 and comp.stats["refined_frames"] >= 1
+    assert comp.stats["unresolved"] == 0
     assert float(row.sum()) == pytest.approx(6.0, rel=0.08)  # energy preserved
 
 

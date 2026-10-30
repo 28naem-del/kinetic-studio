@@ -40,7 +40,7 @@ TRANSITIONS: dict[str, dict[str, Any]] = {
     "fade": {"beats": 1.0, "anchor": 0.5, "shutter": 1.0, "sfx": None, "alias": "cross"},
     "dissolve": {"beats": 1.0, "anchor": 0.5, "shutter": 1.0, "sfx": None},
     "whip": {"beats": 0.5, "anchor": 0.5, "shutter": 3.0, "sfx": "whoosh"},
-    "push": {"beats": 0.75, "anchor": 0.5, "shutter": 2.0, "sfx": "swish"},
+    "push": {"beats": 0.75, "anchor": 0.5, "shutter": 1.25, "sfx": "swish"},
     "zoom": {"beats": 0.75, "anchor": 0.5, "shutter": 2.5, "sfx": "whoosh"},
     "squash": {"beats": 0.5, "anchor": 0.5, "shutter": 2.0, "sfx": "swish"},
     "wipe": {"beats": 1.0, "anchor": 0.5, "shutter": 1.5, "sfx": "swish"},
@@ -202,20 +202,30 @@ def _draw_whip(film: Film, c: skia.Canvas, b: Boundary, p: float, t: float) -> N
     c.restore()
 
 
+def shadow_rgb(film: Film) -> tuple[int, int, int]:
+    """Theme-tinted shadow: the ground colour taken most of the way to black (never pure #000)."""
+    return D.mix_rgb(film.pal.rgb("bg"), (0, 0, 0), 0.72)
+
+
 def _draw_push(film: Film, c: skia.Canvas, b: Boundary, p: float, t: float) -> None:
+    """A decisive panel move: the incoming panel drives in on an in-out cubic that leads the cut
+    while the outgoing scene is pushed out by the same edge with a parallax lag. The window's
+    shutter is short (1.25x), so the move reads as one clean streak; there is no full-frame dim,
+    so the frame never washes out mid-move."""
     W, H = film.W, film.H
     dx, dy = b.direction
-    ea = 0.35 * E.in_cubic(p)                     # outgoing drifts with a parallax lag and dims
-    eb = lead(p, 0.7)
+    eb = lead(p, 0.8)                              # incoming panel position, leading the cut
+    ea = 0.42 * eb                                 # outgoing pushed by the panel with a parallax lag
     c.save(); c.translate(dx * W * ea, dy * H * ea)
     _a(film, c, b, t)
     c.restore()
-    c.drawRect(skia.Rect(0, 0, W, H), D.paint(film.pal("bg", 0.45 * E.clamp(p * 1.4))))
     ox, oy = -dx * W * (1 - eb), -dy * H * (1 - eb)
     s = min(W, H) / 1080.0
-    # soft shadow on the leading edge of the incoming panel
-    sh = skia.Rect(ox, oy, ox + W, oy + H)
-    c.drawRect(sh, D.paint(film.pal("#000000", 0.45 * (1 - eb)), blur=40 * s))
+    # soft, theme-tinted shadow cast by the leading edge of the incoming panel
+    k = math.sin(math.pi * E.clamp(eb))
+    if k > 0.01:
+        sh = skia.Rect(ox, oy, ox + W, oy + H)
+        c.drawRect(sh, D.paint(D.argb(shadow_rgb(film), 0.38 * k), blur=36 * s))
     c.save(); c.translate(ox, oy)
     _b(film, c, b, t, clip=True)
     c.restore()
@@ -339,7 +349,32 @@ def _draw_wipe(film: Film, c: skia.Canvas, b: Boundary, p: float, t: float) -> N
     if edge and e < 0.995:
         k = E.clamp(min(e, 1 - e) * 8) * (1 - full)
         ew = float(b.params.get("edge_w", 10)) * s
-        c.drawPath(path, D.paint(film.pal(str(edge), 0.95 * k), stroke=ew))
+        _wipe_edge(film, c, b, path, e, D.paint(film.pal(str(edge), 0.95 * k), stroke=ew))
+
+
+def _wipe_edge(film: Film, c: skia.Canvas, b: Boundary, path: skia.Path, e: float, paint: skia.Paint) -> None:
+    """Stroke only the moving (leading) edge of a wipe mask, never the frame-border sides."""
+    W, H = film.W, film.H
+    shape = str(b.params.get("shape", "rect"))
+    dx, dy = b.direction
+    if shape == "rect":
+        if dx > 0:
+            c.drawLine(W * e, -H, W * e, 2 * H, paint)
+        elif dx < 0:
+            c.drawLine(W * (1 - e), -H, W * (1 - e), 2 * H, paint)
+        elif dy > 0:
+            c.drawLine(-W, H * e, 2 * W, H * e, paint)
+        else:
+            c.drawLine(-W, H * (1 - e), 2 * W, H * (1 - e), paint)
+        return
+    if shape == "diagonal":
+        # the mask is a huge rect whose leading side is the only edge inside the frame: clip the
+        # stroke to the frame so the far sides (outside it) never show
+        c.save(); c.clipRect(skia.Rect(0, 0, W, H))
+        c.drawPath(path, paint)
+        c.restore()
+        return
+    c.drawPath(path, paint)  # circle / type: the whole outline is the leading edge
 
 
 def _record(film: Film, sc_draw: Callable[[skia.Canvas], None]) -> skia.Picture:

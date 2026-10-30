@@ -14,9 +14,19 @@ Motion blur (``frame_linear``)
       3. otherwise render ``out.samples`` strata (8 standard, 16 high), measure the displacement
          between neighbouring sub-frames and subdivide every stratum whose neighbours are more
          than ~4 px apart, up to ``out.max_samples`` per frame (``refined_frames``);
-      4. if the cap still leaves sub-frames more than ~6 px apart (whips), close the residual
-         gaps with a line blur of that length along the dominant flow, masked to the pixels the
-         sub-frames disagree on (``gap_filled``), so a fast move reads as one smear, not copies.
+      4. if the cap still leaves neighbouring sub-frames more than ~3 px apart (whips, pushes,
+         zooms), close the residual gaps with a per-pixel vector smear (``gap_filled``): dense
+         flow between every pair of consecutive rendered sub-frames gives, per pixel, the step
+         between copies (radial for zooms, rotational for rolls); the accumulated frame is then
+         box-filtered along that local vector over exactly one step, in linear light, with a
+         cascade of 2-tap remaps (2^k taps), so a fast move reads as one continuous streak.
+         Static pixels have a zero vector and stay sharp. ``unresolved`` counts frames where a
+         step was longer than the smear may close (copies could remain); ``undersampled`` counts
+         strata whose middle sub-frame was not the blend of its neighbours (flow under-read).
+
+    Flashes (``film.flash_at``) are applied once per delivered frame, after the blur, so a 2-frame
+    flash is exactly 2 frames at every shutter. Grain and dither are re-seeded per frame from
+    (frame index, spec hash): two renders of the same spec are bit-identical.
 
 Post chain (``_post_linear``, float32)
     linear:  bloom (soft-knee threshold in linear light, two octaves, halation tint)
@@ -43,7 +53,10 @@ _STATIC_TOL = 2          # max |diff| in 8-bit codes at 1/8 res for "the frame d
 _SLOW_PX = 2.0           # displacement (full-res px over the shutter) still covered by 2 samples
 _GAP_PX = 4.0            # refinement target: neighbouring sub-frames at most ~4 px apart
 _MID_TOL = 8             # max |mid - mean(ends)| (8-bit codes, 1/8 res) for a frame to count as slow
-_FILL_PX = 6.0           # residual spacing above this (sample cap reached) is closed by a line blur
+_FILL_PX = 3.0           # residual spacing above this (sample cap reached) is closed by the vector smear
+_SMEAR_MAX = 480.0       # longest step (px at 1080) the smear may close; longer counts as unresolved
+_SMEAR_SPAN = 1.5      # smear length in steps: > 1 so neighbouring copies overlap where the flow field is coarse
+_FIELD_CACHE: dict[tuple, tuple[list[np.ndarray], np.ndarray]] = {}
 
 
 def _theme_name(film: Film) -> str | None:
@@ -114,9 +127,10 @@ class Compositor:
         self._grain_w = wl.astype(np.float32).reshape(256, 1)
         hal = np.asarray(self.grade.halation, np.float32)
         self._halation = hal / max(float((hal * np.asarray(G.LUMA)).sum()), 1e-3)
+        self._grid_xy: tuple[np.ndarray, np.ndarray] | None = None
         self.stats: dict[str, Any] = {"samples": 0, "frames": 0, "adaptive_skips": 0,
                                       "slow_frames": 0, "refined_frames": 0, "gap_filled": 0, "unresolved": 0,
-                                      "max_samples": 0}
+                                      "undersampled": 0, "max_samples": 0, "max_step_px": 0.0}
 
     # ------------------------------------------------------------------ setup
     def _vignette_strength(self) -> float:
@@ -268,12 +282,14 @@ class Compositor:
         # flow under-reads moves larger than a feature's own width (thin strokes at whip speed);
         # a stratum that is not the blend of its neighbours is under-sampled whatever flow says
         full = _GAP_PX * cap / n
+        flagged = False
         for k in range(1, n - 1):
             if max(gaps[k - 1], gaps[k]) > 2 * _GAP_PX:  # flow already asked for subdivision
                 continue
             blend = cv2.addWeighted(smalls[k - 1], 0.5, smalls[k + 1], 0.5, 0.0)  # type: ignore[arg-type]
             if int(cv2.absdiff(smalls[k], blend).max()) > _MID_TOL * 2:  # type: ignore[arg-type]
-                st["unresolved"] += 1
+                st["undersampled"] += 1
+                flagged = True
                 gaps[k - 1], gaps[k] = max(gaps[k - 1], full), max(gaps[k], full)
         need = [max(1, int(math.ceil(max(gaps[k - 1] if k > 0 else 0.0, gaps[k] if k < n - 1 else 0.0) / _GAP_PX)))
                 for k in range(n)]
@@ -282,6 +298,7 @@ class Compositor:
             need = [1 + int((m - 1) * budget / extra) for m in need]
         parts: list[tuple[np.ndarray, float]] = []
         rendered = n
+        seq = [(us[k], smalls[k]) for k in range(n)]  # every rendered sub-frame (time, 1/8 gray)
         for k in range(n):
             m = need[k]
             if m == 1:
@@ -295,57 +312,115 @@ class Compositor:
                 if j == j0:
                     continue
                 u = (k + (j + float(sub[j])) / m) / n
-                rgb, _ = self._sample_rgb(self._time(t, span, u))
+                rgb, sm = self._sample_rgb(self._time(t, span, u))
+                seq.append((u, sm))
                 self._accumulate_now(parts, rgb, self._tent(u) / (n * m))
                 rendered += 1
         if rendered > n:
             st["refined_frames"] += 1
         acc = self._finish(parts, rendered)
-        # residual spacing between neighbouring sub-frames once the cap is reached
+        # estimated residual step once refined; flagged strata (flow under-read) always get checked
         res = [gaps[k] / max(1.0, 0.5 * (need[k] + need[k + 1])) for k in range(n - 1)]
-        kmax = int(np.argmax(res))
-        if res[kmax] > _FILL_PX:
-            self._gap_fill(acc, res[kmax], vecs[kmax], smalls)  # type: ignore[arg-type]
+        if max(res) > _FILL_PX * 0.5 or flagged:
+            self._smear(acc, seq)
         return acc
 
-    def _gap_fill(self, acc: np.ndarray, length: float, vec: tuple[float, float],
-                  smalls: list[np.ndarray]) -> None:
-        """Close the residual gaps of a capped fast frame: a line blur ``length`` px long along the
-        dominant motion, applied only where the sub-frames differ (static pixels stay sharp)."""
-        dx, dy = vec
-        if math.hypot(dx, dy) < 1e-6:
-            dx, dy = 1.0, 0.0
-        L = int(round(length)) | 1
-        if L < 3:
+    # ------------------------------------------------------------------ smear
+    def _step_field(self, seq: list[tuple[float, np.ndarray]]) -> tuple[np.ndarray, np.ndarray, float] | None:
+        """Per-pixel step between consecutive copies (1/8 res, full-res px): for every pair of
+        consecutive rendered sub-frames the dense flow, keeping per pixel the longest step seen
+        where the pair actually changed; grown over the swept path so the gaps between copies
+        get the vector of the copies around them. None if no step exceeds _FILL_PX."""
+        seq = sorted(seq, key=lambda x: x[0])
+        sh, sw = seq[0][1].shape
+        best = np.zeros((sh, sw), np.float32)
+        fx = np.zeros((sh, sw), np.float32)
+        fy = np.zeros((sh, sw), np.float32)
+        if self._dis is None:
+            self._dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_ULTRAFAST)
+        k3 = np.ones((3, 3), np.uint8)
+        for (_, a), (_, b) in zip(seq, seq[1:]):
+            d = cv2.absdiff(a, b)
+            if int(d.max()) <= _STATIC_TOL:
+                continue
+            flow = self._dis.calc(a, b, None)
+            np.nan_to_num(flow, copy=False)
+            mag = cv2.magnitude(flow[..., 0], flow[..., 1])
+            # only where the pair changed (dilated: an edge's flow belongs to both of its sides)
+            mag *= cv2.dilate((d > 4).astype(np.uint8), k3).astype(np.float32)
+            sel = mag > best
+            best[sel] = mag[sel]
+            fx[sel] = flow[..., 0][sel]
+            fy[sel] = flow[..., 1][sel]
+        scale = self.W / float(sw)
+        peak = float(best.max()) * scale
+        self.stats["max_step_px"] = max(float(self.stats.get("max_step_px", 0.0)), round(peak, 2))
+        if peak <= _FILL_PX:
+            return None
+        # grow over the swept path: magnitude-weighted average of the vectors around each pixel
+        r = 1 + int(math.ceil(float(best.max())))
+        ksz = (2 * r + 1, 2 * r + 1)
+        w = best * best + 1e-6
+        wx = cv2.boxFilter(fx * w, -1, ksz, normalize=False)
+        wy = cv2.boxFilter(fy * w, -1, ksz, normalize=False)
+        ws = cv2.boxFilter(w, -1, ksz, normalize=False)
+        grown = cv2.dilate(best, np.ones(ksz, np.uint8))
+        vx, vy = wx / ws, wy / ws
+        vm = cv2.magnitude(vx, vy) + 1e-6
+        k = np.where(grown * scale > _FILL_PX * 0.5, grown / vm, 0.0).astype(np.float32)
+        return (vx * k * scale).astype(np.float32), (vy * k * scale).astype(np.float32), peak
+
+    def _smear(self, acc: np.ndarray, seq: list[tuple[float, np.ndarray]]) -> None:
+        """Close the gaps between copies of a fast move: box-filter acc (linear light, in place)
+        along the local step vector over one step, via log2(taps) cascaded 2-tap remaps."""
+        if len(seq) < 2:
             return
+        fld = self._step_field(seq)
+        if fld is None:
+            return
+        vx_s, vy_s, peak = fld
         self.stats["gap_filled"] += 1
-        blur = self._b1
-        if abs(dy) <= 0.18 * abs(dx):
-            cv2.blur(acc, (L, 1), dst=blur, borderType=cv2.BORDER_REFLECT)
-        elif abs(dx) <= 0.18 * abs(dy):
-            cv2.blur(acc, (1, L), dst=blur, borderType=cv2.BORDER_REFLECT)
-        else:
-            ker = np.zeros((L, L), np.float32)
-            c, r = L // 2, (L - 1) / 2.0
-            nx, ny = dx / math.hypot(dx, dy), dy / math.hypot(dx, dy)
-            cv2.line(ker, (int(round(c - nx * r)), int(round(c - ny * r))),
-                     (int(round(c + nx * r)), int(round(c + ny * r))), 1.0, 1, cv2.LINE_AA)
-            ker /= max(float(ker.sum()), 1e-6)
-            cv2.filter2D(acc, -1, ker, dst=blur, borderType=cv2.BORDER_REFLECT)
-        mx, mn = smalls[0].copy(), smalls[0].copy()
-        for sm in smalls[1:]:
-            cv2.max(mx, sm, dst=mx)
-            cv2.min(mn, sm, dst=mn)
-        # generous, soft mask: anything the sub-frames disagree on, grown by the blur length
-        r = 1 + int(math.ceil(L * self._sw / self.W))
-        m = cv2.dilate(cv2.absdiff(mx, mn), np.ones((2 * r + 1, 2 * r + 1), np.uint8)).astype(np.float32)
-        np.clip(m * (1.0 / 8.0), 0.0, 1.0, out=m)
-        m = cv2.GaussianBlur(m, (0, 0), 1.0)
-        cv2.resize(m, (self.W, self.H), dst=self._m1, interpolation=cv2.INTER_LINEAR)
-        cv2.subtract(blur, acc, dst=self._b2)
-        cv2.merge([self._m1, self._m1, self._m1], dst=self._b3)
-        cv2.multiply(self._b2, self._b3, dst=self._b2)
-        cv2.add(acc, self._b2, dst=acc)
+        if peak > _SMEAR_MAX * self.s:
+            self.stats["unresolved"] += 1
+        lim = _SMEAR_MAX * self.s
+        mag = cv2.magnitude(vx_s, vy_s)
+        over = mag > lim
+        if over.any():
+            f = np.where(over, lim / np.maximum(mag, 1e-6), 1.0).astype(np.float32)
+            vx_s, vy_s = vx_s * f, vy_s * f
+        # region that moves (plus a margin of one step) - the remaps run on that box only
+        mv = (cv2.magnitude(vx_s, vy_s) > 0.5).astype(np.uint8)
+        ys, xs = np.nonzero(mv)
+        if ys.size == 0:
+            return
+        sh, sw = vx_s.shape
+        kx, ky = self.W / float(sw), self.H / float(sh)
+        mpx = min(float(cv2.magnitude(vx_s, vy_s).max()), lim)
+        x0 = max(0, int(xs.min() * kx - mpx) - 2); x1 = min(self.W, int((xs.max() + 1) * kx + mpx) + 2)
+        y0 = max(0, int(ys.min() * ky - mpx) - 2); y1 = min(self.H, int((ys.max() + 1) * ky + mpx) + 2)
+        vx = cv2.resize(vx_s, (self.W, self.H), interpolation=cv2.INTER_LINEAR)[y0:y1, x0:x1]
+        vy = cv2.resize(vy_s, (self.W, self.H), interpolation=cv2.INTER_LINEAR)[y0:y1, x0:x1]
+        if self._grid_xy is None:
+            gx, gy = np.meshgrid(np.arange(self.W, dtype=np.float32), np.arange(self.H, dtype=np.float32))
+            self._grid_xy = (gx, gy)
+        gx, gy = self._grid_xy[0][y0:y1, x0:x1], self._grid_xy[1][y0:y1, x0:x1]
+        # 2^levels taps over span x step: tap spacing <= ~1.5 px at the longest step in the box
+        levels = max(1, min(9, int(math.ceil(math.log2(max(mpx * _SMEAR_SPAN, 3.0) / 1.5)))))
+        src = acc  # full frame: taps may reach outside the box
+        cur = np.ascontiguousarray(acc[y0:y1, x0:x1])
+        for lv in range(levels):
+            f = _SMEAR_SPAN * 0.5 ** (lv + 2)  # +-V/4, +-V/8, ... (x span): 2^levels taps over the step
+            ox, oy = vx * f, vy * f
+            if lv == 0:
+                a = cv2.remap(src, gx + ox, gy + oy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+                b = cv2.remap(src, gx - ox, gy - oy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+            else:
+                lx, ly = gx - x0 + ox, gy - y0 + oy
+                a = cv2.remap(cur, lx, ly, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+                lx, ly = gx - x0 - ox, gy - y0 - oy
+                b = cv2.remap(cur, lx, ly, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+            cur = cv2.addWeighted(a, 0.5, b, 0.5, 0.0)
+        acc[y0:y1, x0:x1] = cur
 
     def _accumulate_now(self, parts: list, rgb: np.ndarray, w: float) -> None:
         """Fold a freshly rendered sub-sample into acc immediately (keeps memory flat)."""
