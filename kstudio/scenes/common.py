@@ -324,19 +324,24 @@ def _film_bloom(ctx: Ctx) -> float:
         return 0.0
 
 
+RING_LABEL_HEADROOM = 1.25   # designed accent-on-fill contrast >= 5.6:1 keeps >= 5:1 after rendering
+
+
 def cta_colors(pal: D.Palette, ground: str, bloom: float = 0.0
                ) -> tuple[tuple[int, int, int], tuple[int, int, int], bool]:
     """(fill, label, ring) for a CTA pill. Filled accent with the readable on-accent ink when that
     pair keeps >= 4.5:1 with headroom for the bloom pass (bloom spills the bright fill over dark
     glyphs: a 5.5:1 pair on the ink theme measures 2.4:1 after a 0.55 bloom); otherwise an accent
-    ring on a dark accent-tinted fill with a light label, which bloom only brightens."""
+    ring on a dark accent-tinted fill. Its label stays accent only with RING_LABEL_HEADROOM over
+    4.5:1 (anti-aliasing, grain and the tinted fill pull a designed 5.02:1 red-on-ink label down to
+    4.60:1 on the delivered pixels); else it is the readable light ink, which bloom only brightens."""
     acc = pal.rgb("accent")
     on_acc = readable(pal, [acc], 4.5, 1.0)[0]
     if contrast_ratio(on_acc, acc) >= 4.5 * (1.0 + 2.0 * max(bloom, 0.0)):
         return acc, on_acc, False
     base = pal.rgb(ground) if ground in pal.theme else pal.rgb("bg")
     fill = D.mix_rgb(base, acc, 0.12)
-    label = acc if contrast_ratio(acc, fill) >= 4.5 else readable(pal, [fill], 4.5, 1.0)[0]
+    label = acc if contrast_ratio(acc, fill) >= 4.5 * RING_LABEL_HEADROOM else readable(pal, [fill], 4.5, 1.0)[0]
     return fill, label, True
 
 
