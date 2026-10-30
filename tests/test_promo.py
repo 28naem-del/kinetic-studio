@@ -136,3 +136,15 @@ def test_legacy_fields_still_work():
     comp = Compositor(film, out)
     for t in (1.0, 3.0, 5.0, 7.0):
         assert comp.frame(int(t * out.fps))[..., :3].std() > 3.0
+
+
+def test_text_led_blocks_fill_60pc_of_the_height(film):
+    g = L.grid(W, H)
+    cta, brand = film.scenes[2], film.scenes[3]
+    lay = cta.layout(_Probe(film, cta, 1.0))
+    assert cta.p["lockup"] and cta.p["sub"]
+    assert g.fills(g.safe_top, g.safe_bottom)            # lockup on the top safe line .. sub on the bottom one
+    from kstudio import draw as D
+    assert lay["blk"].lines[0].baseline - D.cap_height(lay["hf"]) == pytest.approx(g.anchor_y, abs=1.0)  # cap top on 560
+    bl = brand.layout(_Probe(film, brand, 1.0))
+    assert g.fills(bl["mark_top"], g.safe_bottom)

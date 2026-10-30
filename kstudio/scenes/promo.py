@@ -390,10 +390,11 @@ class Device(Scene):
         # leader: from the pill's inner end to the target, drawn on (out_expo over 1/2 beat)
         ax = bx + w if side == "left" else bx
         ay = by + bh / 2
-        lu = E.out_expo(E.clamp(u_t / (0.5 * bl)))
+        lu = E.out_expo(E.clamp((u_t - 0.25 * bl) / (0.5 * bl)))  # draws once the pill is out
         col = co.get("color", "accent")
         lx, ly = ax + (px_ - ax) * lu, ay + (py_ - ay) * lu
-        c.drawLine(ax, ay, lx, ly, D.paint(ctx.pal("ink", 0.9), stroke=g.bl(0.4)))
+        if lu > 0:
+            c.drawLine(ax, ay, lx, ly, D.paint(ctx.pal("ink", 0.9), stroke=g.bl(0.4)))
         if lu > 0.6:
             k = E.out_expo(E.clamp((lu - 0.6) / 0.4))
             ring = (u_t / bl) % 1.0
@@ -607,6 +608,23 @@ class Features(Scene):
             c.restore()
 
 
+def _lockup(ctx: Ctx, g: L.Grid, name: str, mark: str, e: float) -> None:
+    """Small app icon + product name on the top safe line, flush left (entry e in 0..1)."""
+    if e <= 0:
+        return
+    c = ctx.c
+    sz = g.bl(12)
+    y = g.safe_top + (1 - e) * g.bl(4)
+    rad = sz * 0.24
+    D.rrect(c, g.x0, y, sz, sz, rad, _shade(D.linear_grad(g.x0, y, g.x0 + sz, y + sz,
+                                                          [ctx.pal("accent", e), ctx.pal("accent2", e)])))
+    D.icon(c, mark if mark in D.ICONS else "spark", g.x0 + sz / 2, y + sz / 2, sz * 0.56, ctx.pal("#ffffff", e))
+    r = T["body"]
+    f = r.font(ctx, weight=700, face="display")
+    D.draw_text(c, name, g.x0 + sz + g.gutter, y + sz / 2, f, ctx.pal("ink", e), align="left",
+                tracking=r.tk(ctx, "display"), valign="middle")
+
+
 # ---------------------------------------------------------------------- CTA
 
 
@@ -616,9 +634,10 @@ class CTA(Scene):
     shared anchor, a full-width pill button that springs in on beat 1 and pulses on every beat
     (spring landing one frame after the kick, with a ring wave), a touch that presses it on the
     downbeat `tap_at` (click SFX + ripple; the label morphs to `done` if set), a `note` under the
-    button and the `sub` line (platforms) on the bottom safe line."""
+    button and the `sub` line (platforms) on the bottom safe line. `lockup` (product name) puts a
+    small app icon (`mark`) + name on the top safe line so the block spans the frame."""
     defaults = {"kicker": "", "headline": "Try it free", "button": "Get the app", "sub": "", "note": "", "done": "",
-                "tap_at": None, "enter": "1b", "pulse": 0.045}
+                "tap_at": None, "enter": "1b", "pulse": 0.045, "lockup": "", "mark": "spark"}
     time_params = ("enter",)
 
     def tap(self) -> float:
@@ -658,6 +677,8 @@ class CTA(Scene):
         g, blk, br_ = lay["g"], lay["blk"], lay["button"]
         bl = max(ctx.beat_len, 1e-3)
         hr, kr = T["headline"], T["kicker"]
+        if self.p["lockup"]:
+            _lockup(ctx, g, str(self.p["lockup"]), str(self.p["mark"]), E.out_expo(E.clamp((lt + ctx.frame) / (0.75 * bl))))
         if self.p["kicker"]:
             kf = lay["kf"]
             ky = lay["top"] + D.cap_height(kf)
@@ -765,7 +786,7 @@ class Brand(Scene):
     the wordmark (`text`, display role 224 px, `weight` 700) is revealed by an accent mask bar
     that travels across it (out_quint from the scene start) and lands on the beat `hit_at` (logo hit + music stop), a sheen
     sweeps the wordmark, `tagline` and `url` rise in, and `badges` (["App Store", ...]) sit
-    on the bottom safe line."""
+    on the bottom safe line from beat 2."""
     defaults = {"text": "brand", "tagline": "", "url": "", "mark": "spark", "weight": 700, "size": None,
                 "badges": [], "badge_kicker": "Download on", "hit_at": "1b", "stop_music": True}
     time_params = ("hit_at",)
@@ -775,7 +796,7 @@ class Brand(Scene):
         out = [Cue("sfx", 0.0, data={"sound": "riser_short", "gain": -4}), Cue("sfx", h, data={"sound": "logo_hit"}),
                Cue("hit", h, data={"strength": 0.8, "flash": 0.15})]
         if self.p["badges"]:
-            out.append(Cue("sfx", self.bt(3), data={"sound": "pop_soft", "gain": -6}))
+            out.append(Cue("sfx", self.bt(2), data={"sound": "pop_soft", "gain": -6}))
         if self.p["stop_music"]:
             out.append(Cue("cue", h, name="music_stop"))
         return out
@@ -789,8 +810,10 @@ class Brand(Scene):
         tr = r.tk(ctx)
         tw = D.text_w(f, str(self.p["text"]), tr)
         cap = D.cap_height(f)
-        icon = g.bl(32)
+        icon = g.bl(40) if self.p["badges"] else g.bl(32)
         mark_top = g.place(icon + g.bl(10) + cap, "center") - g.bl(8)
+        if self.p["badges"]:  # icon .. badges spans >= 62 % of the frame height (S6 content block)
+            mark_top = max(g.safe_top, min(mark_top, g.safe_bottom - 0.62 * ctx.H))
         base = mark_top + icon + g.bl(10) + cap
         return {"g": g, "f": f, "tr": tr, "tw": tw, "cap": cap, "icon": icon, "mark_top": mark_top, "base": base}
 
@@ -889,7 +912,7 @@ class Brand(Scene):
             total = n * bw + (n - 1) * g.gutter * 2
             bx0 = g.cx - total / 2
             for j, name in enumerate(badges):
-                ub = E.out_quint(E.clamp((lt - self.bt(3) + ctx.frame - j * 0.25 * bl) / (0.75 * bl)))
+                ub = E.out_quint(E.clamp((lt - self.bt(2) + ctx.frame - j * 0.25 * bl) / (0.75 * bl)))
                 if ub <= 0:
                     continue
                 bx = bx0 + j * (bw + g.gutter * 2)

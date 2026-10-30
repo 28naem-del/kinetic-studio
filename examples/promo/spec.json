@@ -28,7 +28,7 @@
       ], "dur": "8b", "transition": "push-left" },
     { "type": "cta", "id": "cta", "kicker": "Free for 14 days", "headline": "Start free today.", "button": "Get Flowly",
       "done": "You're in", "note": "No card needed. Cancel anytime.", "sub": "iOS · Android · Web",
-      "tap_at": "4b", "dur": "8b", "transition": { "kind": "slice", "n": 6 } },
+      "lockup": "Flowly", "mark": "spark", "tap_at": "4b", "dur": "8b", "transition": { "kind": "slice", "n": 6 } },
     { "type": "brand", "id": "end", "text": "flowly", "tagline": "Focus, beautifully.", "url": "flowly.app",
       "mark": "spark", "badges": ["App Store", "Google Play"], "hit_at": "1b", "dur": "4b",
       "transition": { "kind": "wipe", "shape": "circle", "at": [0.5, 0.53] } }
