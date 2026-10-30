@@ -74,6 +74,11 @@ def _worker(wid: int, spec: dict, out_d: dict, grid: dict | None, post: dict | N
             tasks: mp.Queue, results: mp.Queue) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
+        try:  # one process per core already; OpenCV's own pool on top oversubscribes (~25% more CPU)
+            import cv2
+            cv2.setNumThreads(1)
+        except Exception:  # noqa: BLE001
+            pass
         from .beats import BeatGrid
         from .compositor import Compositor
         from .film import Film
