@@ -238,13 +238,79 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
             "rendered_chunks": len(todo)}
 
 
-def mux(video: str, audio: str, out_path: str) -> None:
-    r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", video, "-i", audio,
-                        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                        "-ar", "48000", "-shortest", "-movflags", "+faststart", out_path],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"mux failed: {r.stderr[-800:]}")
+def _rate(r: str | None) -> float:
+    num, _, den = (r or "0/1").partition("/")
+    try:
+        return float(num) / float(den or 1) if float(den or 1) else 0.0
+    except ValueError:
+        return 0.0
+
+
+def video_timing(path: str) -> dict[str, Any]:
+    """Frame-exact timing of a file's first video stream: r_frame_rate, avg_frame_rate, packet count
+    and the stream duration, plus nb_frames/duration (the rate a player actually sees)."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries",
+                        "stream=r_frame_rate,avg_frame_rate,nb_frames,nb_read_packets,duration:format=duration",
+                        "-of", "json", path], capture_output=True, text=True)
+    try:
+        d = json.loads(r.stdout or "{}")
+    except json.JSONDecodeError:
+        d = {}
+    v = (d.get("streams") or [{}])[0]
+    frames = int(v.get("nb_read_packets") or v.get("nb_frames") or 0)
+    dur = float(v.get("duration") or (d.get("format") or {}).get("duration") or 0.0)
+    return {"r_frame_rate": v.get("r_frame_rate"), "avg_frame_rate": v.get("avg_frame_rate"),
+            "r_fps": round(_rate(v.get("r_frame_rate")), 4), "avg_fps": round(_rate(v.get("avg_frame_rate")), 4),
+            "frames": frames, "video_duration": round(dur, 6),
+            "measured_fps": round(frames / dur, 4) if dur > 0 else 0.0}
+
+
+MUX_CEILING_DBTP = -1.0   # delivery true-peak ceiling measured on the encoded AAC track
+MUX_MAX_TRIES = 4
+
+
+def mux(video: str, audio: str, out_path: str, ceiling_dbtp: float = MUX_CEILING_DBTP,
+        max_tries: int = MUX_MAX_TRIES) -> dict[str, Any]:
+    """Mux video (stream copy) + WAV -> AAC 192k MP4, then verify the delivered file.
+
+    * The output runs exactly as long as the video: audio is padded with silence (apad) and the
+      output is cut at the video duration (frames / rate). `-shortest` is not used, because when the
+      audio is a few ms short it trims the video track and the delivered rate/frame count drifts
+      (e.g. 330 frames over 10.967 s = 30.091 fps).
+    * True peak and integrated loudness are measured on the final file (ffmpeg EBU R128, after the
+      AAC encode). If the codec pushed the true peak over `ceiling_dbtp`, the audio is re-encoded with
+      the pre-encode gain lowered by the overshoot (+0.1 dB), up to `max_tries` encodes.
+    Returns the measurements; raises if the mux itself fails."""
+    from .audio.mix import measure
+    vt = video_timing(video)
+    fps = vt["r_fps"] or vt["avg_fps"]
+    dur = vt["frames"] / fps if fps and vt["frames"] else vt["video_duration"]
+    gain_db = 0.0
+    attempts: list[dict[str, Any]] = []
+    loud: dict[str, Any] = {}
+    for _ in range(max(1, max_tries)):
+        af = (f"volume={gain_db:.2f}dB," if gain_db else "") + "apad"
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", video, "-i", audio,
+               "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", af, "-c:a", "aac", "-b:a", "192k",
+               "-ar", "48000"]
+        if dur > 0:
+            cmd += ["-t", f"{dur:.6f}"]
+        r = subprocess.run(cmd + ["-movflags", "+faststart", out_path], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"mux failed: {r.stderr[-800:]}")
+        loud = measure(out_path)
+        attempts.append({"gain_db": round(gain_db, 2), "lufs": loud["lufs"], "true_peak": loud["true_peak"]})
+        over = loud["true_peak"] - ceiling_dbtp
+        if over <= 0:
+            break
+        gain_db -= over + 0.1
+    ot = video_timing(out_path)
+    want = vt["r_fps"]
+    fps_ok = bool(want and abs(ot["r_fps"] - want) < 1e-3 and abs(ot["avg_fps"] - want) < 1e-3
+                  and abs(ot["measured_fps"] - want) < 0.01 and ot["frames"] == vt["frames"])
+    return {"out": out_path, "attempts": attempts, "gain_db": round(gain_db, 2), "loudness": loud,
+            "true_peak_ok": loud.get("true_peak", 0.0) <= ceiling_dbtp, "ceiling_dbtp": ceiling_dbtp,
+            "video_in": vt, "video_out": ot, "fps_ok": fps_ok}
 
 
 def which_ffmpeg() -> None:

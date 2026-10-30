@@ -1,5 +1,10 @@
 """Delivery audit for a finished video: motion/still ratio, longest hold, black frames,
-loudness (LUFS / true peak / LRA), codec profile & level, pixel format, duration, size."""
+loudness (LUFS / true peak / LRA), codec profile & level, pixel format, duration, size.
+
+Loudness and true peak are measured on the delivered file itself (the decoded AAC track, ffmpeg
+EBU R128), so codec overshoot is caught. The frame rate is checked three ways (r_frame_rate,
+avg_frame_rate and frames / stream duration) and must match the requested rate exactly; without
+an expected rate the three must agree with each other."""
 from __future__ import annotations
 
 import json
@@ -20,8 +25,12 @@ def probe(path: str) -> dict[str, Any]:
     a = next((s for s in d["streams"] if s["codec_type"] == "audio"), None)
     num, _, den = v.get("avg_frame_rate", "0/1").partition("/")
     lvl = v.get("level")
+    from .render import video_timing
+    vt = video_timing(path) if v else {}
     return {
         "width": v.get("width"), "height": v.get("height"),
+        "r_fps": vt.get("r_fps"), "avg_fps": vt.get("avg_fps"), "measured_fps": vt.get("measured_fps"),
+        "video_frames": vt.get("frames"), "video_duration": vt.get("video_duration"),
         "fps": round(float(num) / float(den or 1), 3) if float(den or 1) else 0.0,
         "codec": v.get("codec_name"), "profile": v.get("profile"),
         "level": f"{lvl // 10}.{lvl % 10}" if isinstance(lvl, int) else None,
@@ -30,7 +39,8 @@ def probe(path: str) -> dict[str, Any]:
         "size_mb": round(int(d["format"].get("size", 0)) / 1e6, 2),
         "bitrate_kbps": round(int(d["format"].get("bit_rate", 0)) / 1e3),
         "audio": None if a is None else {"codec": a.get("codec_name"), "sample_rate": int(a.get("sample_rate", 0)),
-                                         "channels": a.get("channels")},
+                                         "channels": a.get("channels"),
+                                         "duration": round(float(a.get("duration") or 0.0), 4)},
     }
 
 
@@ -67,7 +77,8 @@ def motion_stats(path: str, width: int, height: int, fps: float) -> dict[str, An
 def audit(path: str, expect: dict[str, Any] | None = None, thresholds: dict[str, Any] | None = None) -> dict[str, Any]:
     from .audio.mix import measure
     expect = expect or {}
-    th = {"min_motion": 0.6, "max_hold": 2.0, "lufs": -14.0, "lufs_tol": 1.0, "max_true_peak": -1.0}
+    th = {"min_motion": 0.6, "max_hold": 2.0, "lufs": -14.0, "lufs_tol": 1.0, "max_true_peak": -1.0,
+          "max_black_frames": 0, "fps_tol": 0.01}
     th.update(thresholds or {})
     p = probe(path)
     m = motion_stats(path, p["width"], p["height"], p["fps"])
@@ -89,15 +100,28 @@ def audit(path: str, expect: dict[str, Any] | None = None, thresholds: dict[str,
         check("audio", False, None, "aac 48000")
     if loud:
         check("loudness", abs(loud["lufs"] - th["lufs"]) <= th["lufs_tol"], loud["lufs"], f"{th['lufs']} ±{th['lufs_tol']} LUFS")
-        check("true_peak", loud["true_peak"] <= th["max_true_peak"] + 0.05, loud["true_peak"], f"<= {th['max_true_peak']} dBTP")
+        check("true_peak", loud["true_peak"] <= th["max_true_peak"], loud["true_peak"], f"<= {th['max_true_peak']} dBTP")
+    check("black_frames", m["black_frames"] <= th["max_black_frames"], m["black_frames"], f"<= {th['max_black_frames']}")
     if "duration" in expect:
         check("duration", abs(p["duration"] - expect["duration"]) <= 1.5 / max(p["fps"], 1) + 0.05, p["duration"],
               f"{round(expect['duration'], 3)} s")
     if "width" in expect:
         check("resolution", (p["width"], p["height"]) == (expect["width"], expect["height"]), f"{p['width']}x{p['height']}",
               f"{expect['width']}x{expect['height']}")
+    if p["audio"] and p["audio"].get("duration") and p.get("video_duration"):
+        gap = round(p["audio"]["duration"] - p["video_duration"], 4)
+        tol = max(0.03, 1.5 / max(p["r_fps"] or 30.0, 1.0))
+        check("av_length", abs(gap) <= tol, f"audio-video {gap:+.3f} s", f"|gap| <= {tol:.3f} s")
+    rates = [p["r_fps"] or 0.0, p["avg_fps"] or 0.0, p["measured_fps"] or 0.0]
+    shown = f"r {rates[0]:g} / avg {rates[1]:g} / n/d {rates[2]:g}"
     if "fps" in expect:
-        check("fps", abs(p["fps"] - expect["fps"]) < 0.01, p["fps"], expect["fps"])
+        want = float(expect["fps"])
+        check("fps", all(abs(r - want) < th["fps_tol"] for r in rates), shown, want)
+        if "duration" in expect:
+            n_want = int(round(float(expect["duration"]) * want))
+            check("frames", abs((p["video_frames"] or 0) - n_want) <= 1, p["video_frames"], n_want)
+    else:
+        check("fps", rates[0] > 0 and all(abs(r - rates[0]) < th["fps_tol"] for r in rates), shown, "r = avg = n/d")
     if "level" in expect:
         check("level", p["level"] == expect["level"], p["level"], expect["level"])
     return {"file": path, "probe": p, "motion": m, "loudness": loud, "checks": checks,
@@ -113,5 +137,9 @@ def format_report(r: dict[str, Any]) -> str:
                  f"level {p['level']}, {p['bitrate_kbps']} kbps; mean motion {m['mean_motion']}, black frames {m['black_frames']}")
     if r.get("loudness"):
         lo = r["loudness"]
-        lines.append(f"  loudness {lo['lufs']} LUFS, true peak {lo['true_peak']} dBTP, LRA {lo['lra']} LU")
+        lines.append(f"  loudness {lo['lufs']} LUFS, true peak {lo['true_peak']} dBTP, LRA {lo['lra']} LU "
+                     f"(measured on the delivered file, {lo.get('meter', 'loudnorm')})")
+    if p.get("r_fps") is not None:
+        lines.append(f"  video stream: {p['video_frames']} frames / {p['video_duration']} s; r_frame_rate {p['r_fps']}, "
+                     f"avg_frame_rate {p['avg_fps']}, frames/duration {p['measured_fps']}")
     return "\n".join(lines)

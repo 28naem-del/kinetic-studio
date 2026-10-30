@@ -12,6 +12,7 @@ from functools import cache
 import numpy as np
 
 from . import dsp as A
+from . import instruments as I
 from .dsp import SR
 
 PEAK: dict[str, float] = {"whoosh": 0.18, "whoosh_big": 0.42, "swish": 0.12, "riser": 2.0, "riser_short": 1.0,
@@ -141,26 +142,113 @@ def key(seed: int = 81) -> np.ndarray:
     return _norm(A.pan(tick + thock, ((seed % 7) - 3) * 0.08), 0.5)
 
 
-def pop() -> np.ndarray:
-    n = int(0.12 * SR)
-    t = A.tvec(0.12)
-    f = 500 + 900 * (1 - np.exp(-t / 0.02))
-    x = A.sine(f, n) * A.env_exp(n, 0.035, 0.001)
-    return _norm(A.stereo(x), 0.6)
+def _room(x: np.ndarray, wet: float = 0.12, rt: float = 0.35, seed: int = 0) -> np.ndarray:
+    """Small, bright room so UI sounds sit in the same space as the bed."""
+    n = len(x)
+    ir = A.room_ir(rt, 0.006, 9000.0, seed=seed, width=1.0, hp=500.0)
+    w = A.fft_convolve(A.stereo(x).astype(np.float32), ir)[:n]
+    return (A.stereo(x) + w * wet).astype(np.float32)
 
 
-def tick() -> np.ndarray:
-    n = int(0.03 * SR)
-    t = A.tvec(0.03)
-    return _norm(A.stereo(A.sine(1700, n) * np.exp(-t / 0.006)), 0.45)
+def pop(f0: float = 520.0, f1: float = 1350.0, dur: float = 0.12, seed: int = 72) -> np.ndarray:
+    """Bubble pop: fast upward sine sweep with a 2nd harmonic, a noise click and a short room."""
+    n = int(dur * SR)
+    t = A.tvec(dur)[:n]
+    f = f0 + (f1 - f0) * (1 - np.exp(-t / 0.018))
+    env = A.env_exp(n, 0.032, 0.0008)
+    x = (A.sine(f, n) + 0.22 * A.sine(2 * f, n) * np.exp(-t / 0.012)) * env
+    x += A.fft_filter(A.noise(n, seed), 2500, 12000) * np.exp(-t / 0.0015) * 0.35
+    return _norm(_room(x, 0.10, 0.25, seed), 0.6)
 
 
-def blip() -> np.ndarray:
-    n = int(0.12 * SR)
-    t = A.tvec(0.12)
-    f = np.where(t < 0.045, 880.0, 1320.0)
-    x = (A.sine(f, n) + 0.3 * A.sine(f * 3, n)) * A.env_exp(n, 0.05, 0.001)
+def tick(f: float = 1700.0, seed: int = 73) -> np.ndarray:
+    """Clock tick: inharmonic pair of partials over a sub-millisecond noise transient."""
+    n = int(0.035 * SR)
+    t = A.tvec(0.035)[:n]
+    x = A.sine(f, n) * np.exp(-t / 0.006) + 0.45 * A.sine(f * 2.76, n) * np.exp(-t / 0.003)
+    x += A.fft_filter(A.noise(n, seed), 4000, 16000) * np.exp(-t / 0.0007) * 0.6
+    return _norm(A.stereo(x), 0.45)
+
+
+def blip(notes: tuple[float, ...] = (880.0, 1320.0), step: float = 0.045, seed: int = 74) -> np.ndarray:
+    """Two-step data blip: band-limited square-ish tone with an octave-down body, slight stereo detune."""
+    dur = step * len(notes) + 0.075
+    n = int(dur * SR)
+    t = A.tvec(dur)[:n]
+    idx = np.minimum((t / step).astype(int), len(notes) - 1)
+    f = np.asarray(notes, np.float64)[idx]
+    body = A.sine(f, n) + 0.3 * A.sine(f * 3, n) + 0.12 * A.sine(f * 5, n) + 0.25 * A.sine(f * 0.5, n)
+    env = A.env_exp(n, dur * 0.42, 0.001)
+    l = body * env
+    r = (A.sine(f * 1.004, n) + 0.3 * A.sine(f * 3.012, n) + 0.25 * A.sine(f * 0.5, n)) * env
+    return _norm(_room(np.stack([l, r], 1), 0.08, 0.25, seed), 0.5)
+
+
+def ui_click(seed: int = 75) -> np.ndarray:
+    """Crisp interface click: 1 ms bright transient, a 3.4 kHz ping and a tiny low body."""
+    n = int(0.05 * SR)
+    t = A.tvec(0.05)[:n]
+    x = A.fft_filter(A.noise(n, seed), 3000, 15000) * np.exp(-t / 0.001)
+    x += A.sine(3400, n) * np.exp(-t / 0.005) * 0.35 + A.sine(620, n) * np.exp(-t / 0.004) * 0.3
+    return _norm(A.stereo(x), 0.55)
+
+
+def ui_tap(seed: int = 76) -> np.ndarray:
+    """Soft tap: falling 900 Hz body with a muted noise touch."""
+    n = int(0.06 * SR)
+    t = A.tvec(0.06)[:n]
+    x = A.sine(700 + 400 * np.exp(-t / 0.006), n) * A.env_exp(n, 0.014, 0.0005)
+    x += A.fft_filter(A.noise(n, seed), 1200, 6000) * np.exp(-t / 0.002) * 0.3
     return _norm(A.stereo(x), 0.5)
+
+
+def tick_hi(seed: int = 77) -> np.ndarray:
+    return tick(4200.0, seed)
+
+
+def pop_soft(seed: int = 78) -> np.ndarray:
+    n = int(0.1 * SR)
+    x = pop(300.0, 720.0, 0.1, seed)[:n]
+    a = int(0.003 * SR)
+    x[:a] *= np.linspace(0, 1, a)[:, None]
+    return _norm(x, 0.5)
+
+
+def blip_up() -> np.ndarray:
+    return blip((660.0, 990.0, 1320.0), 0.04, 79)
+
+
+def blip_down() -> np.ndarray:
+    return blip((1320.0, 990.0, 660.0), 0.04, 80)
+
+
+def snap(seed: int = 82) -> np.ndarray:
+    """Finger snap: resonant 1.5-5 kHz noise burst with a 2.1 kHz body and a short room."""
+    n = int(0.12 * SR)
+    t = A.tvec(0.12)[:n]
+    x = A.fft_filter(A.noise(n, seed), 1500, 5500) * np.exp(-t / 0.012)
+    x += A.sine(2100, n) * np.exp(-t / 0.008) * 0.4
+    return _norm(_room(x, 0.18, 0.4, seed), 0.6)
+
+
+def sub_drop() -> np.ndarray:
+    """Sub drop: 62 -> 28 Hz pitch-falling sine, lightly saturated so it reads on small speakers."""
+    return _norm(A.stereo(A.softclip(I.sub_drop(1.1, 62.0, 28.0) * 1.6, 1.8)), 0.9)
+
+
+def downlifter(dur: float = 1.4, seed: int = 83) -> np.ndarray:
+    """Falling filtered-noise sweep with a short sub tail (energy at its start)."""
+    n = int(dur * SR)
+    t = A.tvec(dur)[:n]
+    u = t / dur
+    nl, nr = A.noise(n, seed), A.noise(n, seed + 1)
+    centre = 300 + 8000 * (1 - u) ** 2.5
+    y = np.stack([A.stft_sweep(nl, centre, q=1.0), A.stft_sweep(nr, centre * 1.05, q=1.0)], 1)
+    a = int(0.004 * SR)
+    env = (1 - u) ** 1.6
+    env[:a] *= np.linspace(0, 1, a)
+    sub = A.sine(55 - 20 * u, n) * np.exp(-t / 0.3) * 0.4
+    return _norm(y * env[:, None] + A.stereo(sub), 0.8)
 
 
 def glitch(seed: int = 91) -> np.ndarray:
@@ -203,13 +291,20 @@ KIT: dict[str, Callable[[], np.ndarray]] = {
     "reverse": reverse, "impact": impact, "impact_big": impact_big, "hit": hit, "thud": thud, "logo_hit": logo_hit,
     "click": click, "key": key, "pop": pop, "tick": tick, "blip": blip, "data_blip": blip, "glitch": glitch,
     "ding": ding, "chime": chime,
+    "sub_drop": sub_drop, "downlifter": downlifter, "ui_click": ui_click, "ui_tap": ui_tap, "tick_hi": tick_hi,
+    "pop_soft": pop_soft, "blip_up": blip_up, "blip_down": blip_down, "snap": snap,
 }
 
 # default mix gains (dB) so every cue sits well without hand-tuning
 GAIN: dict[str, float] = {"whoosh": -6, "whoosh_big": -4, "swish": -8, "riser": -9, "riser_short": -10, "reverse": -10,
                           "impact": -3, "impact_big": -1, "hit": -5, "thud": -8, "logo_hit": -1, "click": -12,
                           "key": -12, "pop": -11, "tick": -16, "blip": -13, "data_blip": -13, "glitch": -9,
-                          "ding": -10, "chime": -9}
+                          "ding": -10, "chime": -9, "sub_drop": -4, "downlifter": -10, "ui_click": -13,
+                          "ui_tap": -12, "tick_hi": -18, "pop_soft": -11, "blip_up": -13, "blip_down": -13, "snap": -11}
+
+# short interface sounds: the mixer randomises their pitch slightly per hit so repeats never sound copy-pasted
+UI_SOUNDS = {"click", "key", "pop", "tick", "blip", "data_blip", "ui_click", "ui_tap", "tick_hi", "pop_soft",
+             "blip_up", "blip_down", "snap", "glitch"}
 
 
 @cache
@@ -219,6 +314,31 @@ def get(name: str) -> np.ndarray:
     x = KIT[name]()
     x.setflags(write=False)
     return x
+
+
+@cache
+def render(name: str, velocity: float = 1.0, pitch: float = 0.0, seed: int = 0) -> np.ndarray:
+    """A kit sound at a velocity (0..1: level and brightness, softer = darker) and a pitch offset in
+    semitones (varispeed, so the clip also gets shorter/longer). `seed` gives a small stereo offset so
+    repeated hits are not bit-identical. Cached; call with rounded arguments."""
+    x = get(name)
+    if abs(pitch) > 1e-3:
+        x = A.resample(x, 2 ** (pitch / 12))
+    v = float(np.clip(velocity, 0.05, 1.5))
+    if v < 0.999:
+        x = A.eq(A.stereo(x), [("highshelf", 2500.0, 0.7, -10.0 * (1 - min(v, 1.0)))])
+    x = A.stereo(x) * v
+    if seed:
+        p = ((seed * 0.61803) % 1.0 - 0.5) * 0.24
+        x = x * np.array([1 - p, 1 + p], np.float32)
+    y = np.clip(x, -1.0, 1.0).astype(np.float32)
+    y.setflags(write=False)
+    return y
+
+
+def peak_of(name: str, pitch: float = 0.0) -> float:
+    """Peak offset (s) of a sound rendered at `pitch` semitones."""
+    return PEAK.get(name, 0.0) / (2 ** (pitch / 12))
 
 
 def export_kit(folder: str) -> list[str]:
