@@ -59,7 +59,10 @@ class Palette:
 
 
 def paint(color: int, stroke: float = 0.0, blur: float = 0.0, shader: skia.Shader | None = None,
-          cap_round: bool = True) -> skia.Paint:
+          cap_round: bool = True, alpha: float | None = None) -> skia.Paint:
+    """Fill/stroke paint. With a ``shader`` the paint alpha still modulates the shader, so a
+    colour whose alpha byte is 0 (e.g. ``paint(0, shader=...)``) is drawn at full opacity; pass
+    a colour with a non-zero alpha byte or ``alpha=`` (0..1) to fade the shader explicitly."""
     p = skia.Paint(AntiAlias=True, Color=color)
     if stroke > 0:
         p.setStyle(skia.Paint.kStroke_Style)
@@ -71,6 +74,10 @@ def paint(color: int, stroke: float = 0.0, blur: float = 0.0, shader: skia.Shade
         p.setMaskFilter(skia.MaskFilter.MakeBlur(skia.kNormal_BlurStyle, blur))
     if shader is not None:
         p.setShader(shader)
+        if alpha is None and (color >> 24) & 0xFF == 0:
+            p.setAlphaf(1.0)
+    if alpha is not None:
+        p.setAlphaf(max(0.0, min(1.0, float(alpha))))
     return p
 
 

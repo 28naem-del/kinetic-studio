@@ -214,3 +214,19 @@ def test_common_scenes_draw_on_every_aspect(preset):
     for i in (20, 50, 80, 110, 140):
         img = comp.frame(i)
         assert img[..., :3].std() > 3.0, (preset, i)
+
+
+def _fill(p: skia.Paint) -> int:
+    surf = skia.Surface(4, 4)
+    c = surf.getCanvas()
+    c.clear(0xFF000000)
+    c.drawRect(skia.Rect(0, 0, 4, 4), p)
+    return int(surf.makeImageSnapshot().toarray()[1, 1, 0])
+
+
+def test_paint_shader_full_alpha_unless_given():
+    white = lambda: D.linear_grad(0, 0, 4, 0, [0xFFFFFFFF, 0xFFFFFFFF])  # noqa: E731
+    assert _fill(D.paint(0, shader=white())) == 255            # colour 0 + shader is opaque
+    assert abs(_fill(D.paint(0x80000000, shader=white())) - 128) <= 1  # explicit alpha byte
+    assert abs(_fill(D.paint(0, shader=white(), alpha=0.25)) - 64) <= 1  # explicit alpha kwarg
+    assert _fill(D.paint(0)) == 0                               # no shader: colour 0 stays clear
