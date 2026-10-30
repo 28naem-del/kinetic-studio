@@ -25,8 +25,8 @@ THEMES: dict[str, dict[str, Any]] = {
         "ink": "#ffffff", "ink_dark": "#0c0a1c", "muted": "#a6a1c9", "pos": "#34d399", "neg": "#fb7185",
         "display": "SpaceGrotesk", "body": "Inter", "mono": "JetBrainsMono", "ground_style": "blobs",
     },
-    "terminal": {  # data / trading: near-black, neon green up, hot red down, gold
-        "bg": "#0c1216", "bg2": "#16212a", "paper": "#e9f1f3", "accent": "#19e68c", "accent2": "#f5c542",
+    "terminal": {  # data / trading: blue-black slate, neon green up, hot red down, gold
+        "bg": "#12181e", "bg2": "#1a252e", "paper": "#e9f1f3", "accent": "#19e68c", "accent2": "#f5c542",
         "ink": "#e9f1f3", "ink_dark": "#06080b", "muted": "#6a7a86", "pos": "#19e68c", "neg": "#ff4d5e",
         "display": "SpaceGrotesk", "body": "Inter", "mono": "JetBrainsMono", "ground_style": "dots",
     },

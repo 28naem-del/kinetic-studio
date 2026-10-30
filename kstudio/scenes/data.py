@@ -6,17 +6,23 @@ An editorial data-desk system on the layout grid (layout.grid / layout.TYPE), ti
   safe top line (scene index in mono, the scene `kicker`, a hairline, a LIVE dot that pulses on
   the beat) and a market tape on the bottom safe line that scrolls on film time, so it runs
   continuously through every cut. The tape lists the film's watchlist (the first `ticker`
-  scene's items, or a scene's own `tape` list; `tape: false` hides it) with a disclaimer under it.
+  scene's items, or a scene's own `tape` list; `tape: false` hides it). The tape is full-bleed by
+  design, under the bottom safe line; the source line (`source`, a disclaimer by default) sits on
+  that line inside the grid.
+* The camera is locked on the content plane (LockedCam): charts and figures sit exactly on the
+  grid and never drift into the margin; the dotted ground keeps its dolly and drift behind them.
 * Headings are the 126 px title role (display face, wght 700) with the cap top on a shared line
   under the running head; charts own the plot band below it, the full content width
   (gridlines x0..x1, data x0..x1 minus a value-label gutter) from that line to the bottom safe
   zone. Text-led scenes (counter) set the hero figure's cap top on the 560 anchor.
-* Figures are JetBrains Mono (tabular by construction). Counting values step on 16th notes and
+* Figures are JetBrains Mono (tabular by construction). Counting values step on 16th notes (the
+  stat cards and the candle read-out on 8ths) and
   roll digit by digit like an odometer; leading zeros of the final width are set dim so the
   figure never reflows. The counter's weight axis climbs 300 -> 800 as it counts.
 * Colour carries meaning only: the accent is "up / the subject", `neg` is "down"; every other
   mark is ink or muted.
-* Motion grammar: entries out_expo / out_quint, moves in_out_quint, no overshoot except the delta
+* Motion grammar: entries out_expo / out_quint, moves in_out_quint, read cursors and gauge sweeps
+  in_out_sine (an even pace that stays legible under the shutter), no overshoot except the delta
   pill (pop = back 4 %). Every reveal, count landing, candle open/close and callout sits on the
   beat grid and has an SFX on that beat.
 * Match cuts: the counter publishes its sparkline as "spark" (the line chart grows out of it),
@@ -49,6 +55,7 @@ Every scene keeps the v0.1 fields of the same name (title -> heading, seconds-va
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import math
 import random
 from collections.abc import Iterator
@@ -56,6 +63,7 @@ from typing import Any
 
 import skia
 
+from .. import camera as CAM
 from .. import draw as D
 from .. import ease as E
 from .. import layout as L
@@ -64,7 +72,8 @@ from .base import Ctx, Cue, Scene, register
 T = L.TYPE
 ENTER = E.out_expo        # house entry
 SETTLE = E.out_quint      # long settles (rules, bars, gridlines)
-MOVE = E.in_out_quint     # cursor / morph moves
+MOVE = E.in_out_quint     # morph moves (hand-offs)
+SCAN = E.in_out_sine      # read cursor and gauge sweeps: an even pace the eye can read under the shutter
 POP = E.resolve("pop")    # back(0.04): the delta pill only
 MINUS = "−"
 UP, DOWN = "▲", "▼"
@@ -283,22 +292,63 @@ def area_under(pts: list[tuple[float, float]], base_y: float) -> skia.Path:
     return p
 
 
+# ---------------------------------------------------------------------- camera
+
+class LockedCam(CAM.CamState):
+    """The data desk's camera: the content plane is locked to the layout grid (figures and charts
+    never drift, dolly or shake into the margin), while every other depth keeps its motion
+    relative to it, so the dotted ground still dollies and breathes behind the content."""
+
+    def matrix(self, depth: float = 1.0, world: bool = False) -> skia.Matrix:
+        base = CAM.CamState.matrix(self, 1.0)
+        inv = skia.Matrix()
+        if not base.invert(inv):
+            return skia.Matrix()
+        return skia.Matrix.Concat(inv, CAM.CamState.matrix(self, depth, world))
+
+    def tilt(self) -> skia.M44 | None:
+        return None
+
+
+@contextlib.contextmanager
+def clip_x(ctx: Ctx, g: L.Grid) -> Iterator[None]:
+    """Clip chart marks (glows, rings, round caps) to the content columns x0..x1."""
+    ctx.c.save()
+    ctx.c.clipRect(skia.Rect(g.x0, -ctx.H, g.x1, 2 * ctx.H))
+    try:
+        yield
+    finally:
+        ctx.c.restore()
+
+
 # ---------------------------------------------------------------------- base scene
 
 class DataScene(Scene):
     """Shared grid, chrome and heading for the data scenes."""
     time_params = ("draw", "reveal")
 
+    # -- camera ----------------------------------------------------------
+    def camera_state(self, ctx: Ctx) -> CAM.CamState:
+        st = super().camera_state(ctx)
+        return LockedCam(**{f.name: getattr(st, f.name) for f in dataclasses.fields(st)})
+
     # -- timing ----------------------------------------------------------
     def shutter(self, lt: float) -> float:
         """Closed shutter on the frame that lands on the cut: a centred shutter there would average
-        the outgoing and incoming scenes into one smeared frame; the cut frame is the new scene, sharp."""
-        return 0.0 if self.start > 0 and lt < 1 / 120 else 1.0
+        the outgoing and incoming scenes into one smeared frame; the cut frame is the new scene, sharp.
+        Frame 0 of the film is a cut from nothing: the poster frame is sharp too."""
+        return 0.0 if lt < 1 / 120 else 1.0
 
     @property
     def cut_in(self) -> bool:
         """Entered on a cut: the new heading and running head are the cut, set on its first frame."""
         return self.start > 0
+
+    @property
+    def preset(self) -> bool:
+        """Heading and running head are on the first frame: on every cut, and on frame 0 of the film
+        (the poster frame opens on the title, not on an empty desk)."""
+        return True
 
     def b(self, key: str, default: float) -> float:
         """A timing parameter in beats (spec values are beat units or seconds)."""
@@ -314,8 +364,9 @@ class DataScene(Scene):
 
     @staticmethod
     def plot_rect(g: L.Grid) -> skia.Rect:
-        """The chart band: full content width, from under the heading to above the x labels."""
-        return skia.Rect(g.x0, g.safe_top + g.bl(33), g.x1, g.safe_bottom - g.bl(10))
+        """The chart band: full content width, from under the heading to above the x labels and the
+        source line (which sits on the bottom safe line)."""
+        return skia.Rect(g.x0, g.safe_top + g.bl(33), g.x1, g.safe_bottom - g.bl(12))
 
     @staticmethod
     def gutter_w(g: L.Grid) -> float:
@@ -344,6 +395,15 @@ class DataScene(Scene):
     def chrome(self, ctx: Ctx, g: L.Grid) -> None:
         with screen(ctx):
             self._folio(ctx, g)
+            # source line on the bottom safe line: the scene's `source`, else the disclaimer
+            src = self.p.get("source")
+            mr = T["meta"]
+            nf = mr.font(ctx, weight=500)
+            base = g.safe_bottom - g.bl(1)
+            line = f"SOURCE {src}" if src else "ILLUSTRATIVE DATA · NOT FINANCIAL ADVICE"
+            if src is not False:
+                D.draw_text(ctx.c, line.upper(), g.x0, base, nf, ctx.pal("muted", 0.9), align="left",
+                            tracking=mr.tk(ctx))
             items = self.tape_items(ctx)
             if items:
                 draw_tape(ctx, g, items)
@@ -354,7 +414,7 @@ class DataScene(Scene):
         kf, mf = kr.font(ctx), mr.font(ctx, weight=600)
         base = g.safe_top + g.bl(2) + D.cap_height(kf)
         ink = ctx.pal.on("bg")
-        u = 1.0 if self.cut_in else _bu(ctx, 0.0, 0.5)
+        u = 1.0 if self.preset else _bu(ctx, 0.0, 0.5)
         idx, count = self._index(ctx)
         x = g.x0
         D.draw_text(c, idx, x, base, mf, ctx.pal("accent"), align="left", tracking=mr.tk(ctx))
@@ -413,33 +473,32 @@ class DataScene(Scene):
         ink = ctx.pal(ctx.pal.on("bg"))
         base = top + cap
         for i, ln in enumerate(lines):
-            u = 1.0 if self.cut_in and at <= 0 else _bu(ctx, at + i / 16, 0.5)
+            u = 1.0 if self.preset and at <= 0 else _bu(ctx, at + i / 16, 0.5)
             _rise(ctx, ln, g.x0, base + i * pitch, f, ink, u, tk)
         return base + (len(lines) - 1) * pitch
 
     # -- shared chart frame ----------------------------------------------
     def grid_lines(self, ctx: Ctx, g: L.Grid, r: skia.Rect, u: float, labels: list[str],
-                   old: list[str] | None = None, roll: float = 1.0) -> None:
-        """Five horizontal gridlines over the full content width (far layer) with right-aligned
-        mono labels above them; labels roll from `old` (axis hand-off) or rise in."""
+                   old: list[str] | None = None, roll: float = 1.0, lab_u: float | None = None) -> None:
+        """Five horizontal gridlines over the full content width with right-aligned mono labels
+        above them in the axis gutter; labels roll from `old` (axis hand-off) or rise in."""
         c = ctx.c
         mr = T["meta"]
         mf = mr.font(ctx, weight=500)
-        with ctx.layer(1.25):
-            for k in range(5):
-                y = r.top() + r.height() * k / 4
-                w = (g.x1 - g.x0) * SETTLE(E.clamp(u * 1.4 - k * 0.1))
-                if w > 0.5:
-                    col = ctx.pal("ink", 0.22 if k == 4 else 0.1)
-                    c.drawRect(skia.Rect(g.x0, y - g.bl(0.125), g.x0 + w, y + g.bl(0.125)), D.paint(col))
-                if k < len(labels):
-                    lab = labels[k]
-                    base = y - g.bl(1.5)
-                    if old is not None and k < len(old):
-                        odometer(ctx, old[k], lab, roll, g.x1, base, mf, ctx.pal("muted"), align="right")
-                    else:
-                        _rise(ctx, lab, g.x1, base, mf, ctx.pal("muted"), E.clamp(u * 1.5 - k * 0.08),
-                              align="right")
+        for k in range(5):
+            y = r.top() + r.height() * k / 4
+            w = (g.x1 - g.x0) * SETTLE(E.clamp(u * 1.4 - k * 0.1))
+            if w > 0.5:
+                col = ctx.pal("ink", 0.22 if k == 4 else 0.1)
+                c.drawRect(skia.Rect(g.x0, y - g.bl(0.125), g.x0 + w, y + g.bl(0.125)), D.paint(col))
+            if k < len(labels):
+                lab = labels[k]
+                base = y - g.bl(1.5)
+                if old is not None and k < len(old):
+                    odometer(ctx, old[k], lab, roll, g.x1, base, mf, ctx.pal("muted"), align="right")
+                else:
+                    _rise(ctx, lab, g.x1, base, mf, ctx.pal("muted"), lab_u if lab_u is not None else
+                          E.clamp(u * 1.5 - k * 0.08), align="right")
 
 
 def draw_tape(ctx: Ctx, g: L.Grid, items: list[dict], big: bool = False) -> None:
@@ -482,9 +541,6 @@ def draw_tape(ctx: Ctx, g: L.Grid, items: list[dict], big: bool = False) -> None
                 xx += tri_s + g.bl(1)
                 D.draw_text(c, q, xx, base, f, col, align="left", tracking=tk)
             x += w + gap
-    nf = T["meta"].font(ctx, weight=500)
-    D.draw_text(c, "ILLUSTRATIVE DATA · NOT FINANCIAL ADVICE", g.x0, top + h + g.bl(5), nf,
-                ctx.pal("muted", 0.9), align="left", tracking=T["meta"].tk(ctx))
 
 
 # ---------------------------------------------------------------------- counter
@@ -494,9 +550,9 @@ class Counter(DataScene):
     """Hero figure on the anchor counting up on 16ths over `count` (odometer roll, weight 300 ->
     800) and landing on the downbeat after it; label, a delta pill on the landing and a
     full-width sparkline (published as "spark" for a match cut into a line chart)."""
-    defaults = {"value": None, "from": 0, "decimals": 0, "prefix": "", "suffix": "", "label": "", "kicker": "",
+    defaults = {"value": None, "from": None, "decimals": 0, "prefix": "", "suffix": "", "label": "", "kicker": "",
                 "heading": "", "delta": None, "delta_note": "", "count": "2b", "first": "0b", "spark": True,
-                "seed": 3, "color": "ink", "delay": None}
+                "seed": 3, "color": "ink", "delay": None, "spark_prefix": None, "spark_decimals": None}
 
     def _spark(self) -> list[float]:
         sp = self.p["spark"]
@@ -512,8 +568,20 @@ class Counter(DataScene):
         data = self._spark()
         return data[-1] if data else 1000.0
 
+    def _from(self) -> float:
+        """Where the count starts: an explicit `from`, else the first point of the series the figure
+        is the last point of (the poster frame reads as a real price, not a row of ghost zeros)."""
+        if self.p["from"] is not None:
+            return float(self.p["from"])
+        data = self._spark()
+        if self.p["value"] is None and data:
+            return data[0]
+        return 0.0
+
     def _delta(self) -> str:
         d = self.p["delta"]
+        if d is False:
+            return ""
         if d is None:
             data = self._spark()
             return fmt(change_pct(data), 1, "", "%", sign=True) if data else ""
@@ -544,20 +612,19 @@ class Counter(DataScene):
         land = math.ceil(f_b + c_b - 1e-6)
         self.heading(ctx, g, self.heading_text(), max_lines=1)
         final = self._value()
-        v0 = float(self.p["from"])
+        v0 = self._from()
         dec, pre, suf = int(self.p["decimals"]), str(self.p["prefix"]), str(self.p["suffix"])
         a, b, ur = stepped(lb, f_b, c_b)
         sa, d0, d1 = padded(E.lerp(v0, final, a), final, dec, pre, suf)
         sb, _, _ = padded(E.lerp(v0, final, b), final, dec, pre, suf)
         n = len(padded(final, final, dec, pre, suf)[0])
-        adv_em = 0.6
-        size = min(g.px(300), g.content_w / (n * adv_em))
+        adv_em = D.text_w(mono(ctx, 100.0, 800), "0") / 100.0  # measured: the figure never passes x1
+        size = min(g.px(300), (g.content_w - g.bl(1)) / (n * adv_em))  # bl(1): heavy-weight overhang
         prog = E.clamp((lb - f_b) / max(c_b, 1e-6))
         wght = int(300 + 500 * ENTER(prog))
         f = mono(ctx, size, wght)
         cap = D.cap_height(f)
         base = g.anchor_y + cap
-        landed = lb >= land
         col = ctx.pal(self.p["color"]) if self.p["color"] in ctx.theme else ctx.pal("ink")
         odometer(ctx, sa, sb, ur, g.x0, base, f, col, dim=ctx.pal("muted", 0.45), dim_range=(d0, d1))
         # landing underline: the figure's width, accent, drawn on the downbeat
@@ -602,17 +669,19 @@ class Counter(DataScene):
         data = self._spark()
         if data:
             r = skia.Rect(g.x0, pill_top + pill_h + g.bl(8), g.x1, self.plot_rect(g).bottom())
-            self.draw_spark(ctx, g, data, r, prog, lb >= land)
+            with clip_x(ctx, g):
+                self.draw_spark(ctx, g, data, r, prog, lb >= land)
             ctx.publish("spark", r, kind="line")
         self.chrome(ctx, g)
 
     def draw_spark(self, ctx: Ctx, g: L.Grid, data: list[float], r: skia.Rect, prog: float, landed: bool) -> None:
         c = ctx.c
-        with ctx.layer(1.25):
-            c.drawRect(skia.Rect(r.left(), r.bottom() - g.bl(0.125), r.right(), r.bottom() + g.bl(0.125)),
-                       D.paint(ctx.pal("ink", 0.22)))
+        c.drawRect(skia.Rect(r.left(), r.bottom() - g.bl(0.125), r.right(), r.bottom() + g.bl(0.125)),
+                   D.paint(ctx.pal("ink", 0.22)))
         upto = SETTLE(E.clamp(prog * 1.05 + 0.08)) * (len(data) - 1)
-        path, pts = spark_path(data, r, upto=upto)
+        # the head (radius bl 1.6) stays inside the right column edge
+        pr = skia.Rect(r.left() + g.bl(1.6), r.top(), r.right() - g.bl(1.6), r.bottom())
+        path, pts = spark_path(data, pr, upto=upto)
         if len(pts) < 2:
             return
         sh = D.linear_grad(0, r.top(), 0, r.bottom(), [ctx.pal("accent", 0.30), ctx.pal("accent", 0.0)])
@@ -624,7 +693,9 @@ class Counter(DataScene):
         c.drawCircle(hx, hy, g.bl(0.9), D.paint(ctx.pal("ink")))
         mf = T["meta"].font(ctx, weight=500)
         lo, hi = min(data), max(data)
-        dec, pre = int(self.p["decimals"]), str(self.p["prefix"])
+        sd, sp = self.p.get("spark_decimals"), self.p.get("spark_prefix")
+        dec = int(self.p["decimals"]) if sd is None else int(sd)
+        pre = str(self.p["prefix"]) if sp is None else str(sp)
         u = E.clamp(prog * 2)
         _rise(ctx, f"30D HIGH {fmt(hi, dec, pre)}", r.left(), r.top() - g.bl(2), mf, ctx.pal("muted"), u,
               T["meta"].tk(ctx))
@@ -638,7 +709,7 @@ class Counter(DataScene):
 class LineChart(DataScene):
     """Line chart on the full plot band. With a "spark" hand-off the counter's sparkline grows
     into the plot; otherwise the line draws in over the first beat. A read cursor then travels
-    the series (in_out_quint over `draw`), lighting the area behind it; event callouts land on
+    the series (in_out_sine over `draw`), lighting the area behind it; event callouts land on
     the beat after the cursor passes them; the change figure lands when the read ends."""
     defaults = {"kicker": "", "title": "", "heading": "", "series": {"seed": 11, "n": 60}, "prefix": "$",
                 "suffix": "", "decimals": 0, "draw": "3b", "first": "1b", "events": [], "x_labels": [],
@@ -653,7 +724,13 @@ class LineChart(DataScene):
 
     def _cursor(self, lb: float) -> float:
         """Fraction 0..1 of the series read at local beat lb."""
-        return MOVE(E.clamp((lb - self.b("first", 1.0)) / max(self.b("draw", 3.0), 1e-6)))
+        return SCAN(E.clamp((lb - self.b("first", 1.0)) / max(self.b("draw", 3.0), 1e-6)))
+
+    def _read_at(self, data: list[float], lb: float) -> float:
+        """Series value under the read cursor at local beat lb."""
+        fi = self._cursor(lb) * (len(data) - 1)
+        k = min(int(fi), len(data) - 2)
+        return E.lerp(data[k], data[k + 1], fi - k)
 
     def _pass_beat(self, i: int, n: int) -> float:
         """Whole beat on which event i's callout lands (the beat after the cursor reaches it)."""
@@ -662,7 +739,7 @@ class LineChart(DataScene):
         lo, hi = 0.0, 1.0
         for _ in range(40):
             mid = (lo + hi) / 2
-            if MOVE(mid) < target:
+            if SCAN(mid) < target:
                 lo = mid
             else:
                 hi = mid
@@ -739,19 +816,19 @@ class LineChart(DataScene):
             if len(lit) > 1:
                 sh2 = D.linear_grad(0, r.top(), 0, r.bottom(), [ctx.pal("accent", 0.38), ctx.pal("accent", 0.02)])
                 c.drawPath(area_under(lit, r.bottom()), D.paint(0, shader=sh2))
-        c.drawPath(path, D.paint(ctx.pal("accent", 0.3), stroke=g.bl(1.6), blur=g.bl(1)))
-        c.drawPath(path, D.paint(ctx.pal("accent"), stroke=g.bl(0.65)))
-        # events: point ring + leader + label pill, in front
+        with clip_x(ctx, g):
+            c.drawPath(path, D.paint(ctx.pal("accent", 0.3), stroke=g.bl(1.6), blur=g.bl(1)))
+            c.drawPath(path, D.paint(ctx.pal("accent"), stroke=g.bl(0.65)))
+        # events: point ring + elbow leader + label pill on the column grid, in front
         ev_list = [ev for ev in self.p["events"] if 0 <= int(ev.get("i", 0)) < n]
         X = lambda i: r.left() + r.width() * i / max(n - 1, 1)  # noqa: E731
         Y = lambda v: r.bottom() - r.height() * (v - lo_k) / max(hi_k - lo_k, 1e-9)  # noqa: E731
-        with ctx.layer(0.85):
-            for ev in ev_list:
-                i = int(ev["i"])
-                u = _bu(ctx, self._pass_beat(i, n), 0.5)
-                if u <= 0:
-                    continue
-                self._callout(ctx, g, X(i), Y(data[i]), str(ev.get("text", "")), u, r)
+        for ev in ev_list:
+            i = int(ev["i"])
+            u = _bu(ctx, self._pass_beat(i, n), 0.5)
+            if u <= 0:
+                continue
+            self._callout(ctx, g, X(i), Y(data[i]), str(ev.get("text", "")), u, dr)
         # cursor
         if 0 < cur:
             hx = X(fi)
@@ -762,17 +839,27 @@ class LineChart(DataScene):
             c.drawRect(skia.Rect(hx - g.bl(0.125), r.top(), hx + g.bl(0.125), r.bottom()), D.paint(ctx.pal("ink", 0.35 * a)))
             c.drawCircle(hx, hy, g.bl(2.2), D.paint(ctx.pal("accent", 0.3)))
             c.drawCircle(hx, hy, g.bl(1.0), D.paint(ctx.pal("ink")))
-            bf = mono(ctx, T["caption"].px(g), 700)
-            txt = fmt(hv, dec, pre, suf)
-            bw = D.text_w(bf, txt) + g.bl(3)
-            bh = g.bl(7)
-            bx = hx + g.bl(2) if hx + g.bl(2) + bw < g.x1 else hx - g.bl(2) - bw
-            by = hy - g.bl(2) - bh if hy - bh - g.bl(2) > r.top() else hy + g.bl(2)
-            if a > 0.01:
-                D.rrect(c, bx, by, bw, bh, g.bl(1), D.paint(ctx.pal("accent", a)))
-                D.draw_text(c, txt, bx + bw / 2, by + bh / 2, bf, ctx.pal("ink_dark", a), valign="middle")
-        # the change figure lands when the read ends
+        # the reading: set still, top-left of the plot (a badge riding the cursor smeared into an
+        # unreadable streak); it re-quotes on 8ths with an odometer roll and gives way, on the
+        # beat the read ends, to the change figure in the same slot
         end = math.ceil(self.b("first", 1.0) + self.b("draw", 3.0) - 1e-6)
+        if 0 < cur and lb < end:
+            q1 = math.floor(lb * 2 + 1e-9) / 2
+            va, vb = self._read_at(data, max(q1 - 0.5, 0.0)), self._read_at(data, q1)
+            ur = E.clamp((lb - q1) / 0.35)
+            mf = T["meta"].font(ctx, weight=600)
+            rf = mono(ctx, T["title"].px(g), 800)
+            y0 = plot.top() + g.bl(6)
+            day = min(int(round(self._cursor(q1) * (n - 1))), n - 1) + 1  # the day of the figure shown
+            ru = E.clamp((lb - self.b("first", 1.0)) / 0.5)
+            _rise(ctx, f"DAY {day:02d} OF {n}", plot.left(), y0, mf, ctx.pal("muted"), ru, T["meta"].tk(ctx))
+            if ru > 0:
+                c.save()
+                c.translate(0, (1 - ENTER(ru)) * g.bl(4))
+                odometer(ctx, fmt(va, dec, pre, suf), fmt(vb, dec, pre, suf), ur, plot.left(),
+                         y0 + g.bl(3) + D.cap_height(rf), rf, ctx.pal("ink", ENTER(ru)))
+                c.restore()
+        # the change figure lands when the read ends
         if self.p["change"]:
             u = _bu(ctx, end, 0.5)
             if u > 0:
@@ -791,6 +878,8 @@ class LineChart(DataScene):
         self.chrome(ctx, g)
 
     def _callout(self, ctx: Ctx, g: L.Grid, px: float, py: float, text: str, u: float, r: skia.Rect) -> None:
+        """Ring on the point, an elbow leader (vertical off the point, then horizontal along a
+        baseline-grid row) into a label pill whose edge sits on a column line of the grid."""
         c = ctx.c
         e = ENTER(u)
         c.drawCircle(px, py, g.bl(2.6) * e, D.paint(ctx.pal("ink", 0.9), stroke=g.bl(0.4)))
@@ -798,16 +887,37 @@ class LineChart(DataScene):
         tw = D.text_w(cf, text)
         pw, ph = tw + g.bl(4), g.bl(8)
         above = py - r.top() > r.height() * 0.45
-        ly = py - g.bl(16) - ph if above else py + g.bl(16)
-        ly = min(max(ly, r.top()), r.bottom() - ph)
-        lx = min(max(px - pw / 2, g.x0), g.x1 - pw)
+        mid = g.snap(py - g.bl(14) - ph / 2 if above else py + g.bl(14) + ph / 2)
+        mid = min(max(mid, r.top() + ph / 2), r.bottom() - ph / 2)
+        ly = mid - ph / 2
+        # pill on the column grid: starting at the first column line right of the point, else
+        # ending at the last column line left of it
+        cols = [g.col(k) for k in range(g.cols)] + [g.x1]
+        right = [x for x in cols if x >= px + g.bl(3) and x + pw <= r.right()]
+        if right:
+            lx, edge = right[0], right[0]
+        else:
+            ends = [g.col_end(k) for k in range(g.cols)]
+            left = [x for x in ends if x <= px - g.bl(3) and x - pw >= r.left()]
+            edge = left[-1] if left else min(max(px - pw / 2, r.left()), r.right() - pw)
+            lx = edge - pw
         y_from = py - g.bl(2.8) if above else py + g.bl(2.8)
-        y_to = ly + ph if above else ly
-        c.drawLine(px, y_from, px, E.lerp(y_from, y_to, e), D.paint(ctx.pal("ink", 0.7), stroke=g.bl(0.3)))
+        lp = D.paint(ctx.pal("ink", 0.7), stroke=g.bl(0.3))
+        v_len, h_len = abs(mid - y_from), abs(edge - px)
+        run = (v_len + h_len) * e
+        vy = y_from + math.copysign(min(run, v_len), mid - y_from)
+        c.drawLine(px, y_from, px, vy, lp)
+        if run > v_len and h_len > 0:
+            c.drawLine(px, mid, px + math.copysign(run - v_len, edge - px), mid, lp)
+        if run >= v_len:
+            c.drawCircle(px, mid, g.bl(0.5), D.paint(ctx.pal("ink", 0.7)))
         w = pw * ENTER(E.clamp(u * 1.6 - 0.3))
         if w > 1:
             c.save()
-            c.clipRect(skia.Rect(lx, ly, lx + w, ly + ph))
+            if lx == edge:
+                c.clipRect(skia.Rect(lx, ly, lx + w, ly + ph))
+            else:
+                c.clipRect(skia.Rect(lx + pw - w, ly, lx + pw, ly + ph))
             D.rrect(c, lx, ly, pw, ph, g.bl(1), D.paint(ctx.pal("ink")))
             D.draw_text(c, text, lx + g.bl(2), ly + ph / 2, cf, ctx.pal("ink_dark"), align="left", valign="middle")
             c.restore()
@@ -858,6 +968,8 @@ class Candles(DataScene):
             lo = min(o, cl) * (1 - abs(rnd.gauss(0, vol * 0.45)))
             if level is not None and end is not None and i < n - 2:
                 h = min(h, float(level) * 0.997)
+            if level is not None and end is not None and float(end) > float(level) and i == n - 1:
+                lo = max(lo, float(level) * 1.0015)  # the candle after the breakout holds above the level
             out.append((o, h, lo, cl))
         return out
 
@@ -944,26 +1056,25 @@ class Candles(DataScene):
                 col = ctx.pal("accent" if broke else "ink", 0.9 if broke else 0.45)
                 p = D.paint(col, stroke=g.bl(0.3), cap_round=False)
                 p.setPathEffect(skia.DashPathEffect.Make([g.bl(1.5), g.bl(1)], 0))
-                c.drawLine(g.x0, ly, g.x0 + (g.x1 - g.x0) * SETTLE(u), ly, p)
+                c.drawLine(g.x0, ly, g.x0 + (dr.right() - g.x0) * SETTLE(u), ly, p)
                 mf = T["meta"].font(ctx, weight=700)
                 tag = (str(self.p["callout"]) or f"CLOSES ABOVE {fmt(float(level), 0)}") if broke else \
                     f"RESISTANCE {fmt(float(level), 0)}"
                 _rise(ctx, tag.upper(), g.x0, ly - g.bl(1.5), mf, ctx.pal("accent" if broke else "muted"),
                       _bu(ctx, brk, 0.5) if broke else u, T["meta"].tk(ctx))
-        # volume (bottom band of the plot, far layer)
+        # volume (bottom band of the plot)
         vb = dr.height() * 0.11
-        with ctx.layer(1.12):
-            for i, (o, h, l_, cl) in enumerate(data):
-                vis = self._visible(i, hist, live, f0, sweep, lb)
-                if vis <= 0:
-                    continue
-                x = dr.left() + slot * (i + 0.5)
-                vh = vb * (0.25 + 0.75 * (0.5 + E.noise1(i * 1.37, int(self.p["seed"])) * 0.5))
-                if i == hist + live - 1:
-                    vh = vb * 1.25
-                vh *= ENTER(E.clamp(vis))
-                col = ctx.pal("accent" if cl >= o else "neg", 0.28)
-                c.drawRect(skia.Rect(x - slot * 0.32, dr.bottom() - vh, x + slot * 0.32, dr.bottom()), D.paint(col))
+        for i, (o, _h, _l, cl) in enumerate(data):
+            vis = self._visible(i, hist, live, f0, sweep, lb)
+            if vis <= 0:
+                continue
+            x = dr.left() + slot * (i + 0.5)
+            vh = vb * (0.25 + 0.75 * (0.5 + E.noise1(i * 1.37, int(self.p["seed"])) * 0.5))
+            if i == hist + live - 1:
+                vh = vb * 1.25
+            vh *= ENTER(E.clamp(vis))
+            col = ctx.pal("accent" if cl >= o else "neg", 0.28)
+            c.drawRect(skia.Rect(x - slot * 0.32, dr.bottom() - vh, x + slot * 0.32, dr.bottom()), D.paint(col))
         # candles
         last = None
         closes: list[float] = []
@@ -1001,22 +1112,49 @@ class Candles(DataScene):
             by = Y(data[hist + live - 1][3])
             rr = g.bl(2) + g.bl(10) * ENTER(u)
             c.drawCircle(bx, by, rr, D.paint(ctx.pal("accent", 0.8 * (1 - u)), stroke=g.bl(0.5)))
-        # last price line + badge on the axis
+        # last price: a dashed line from the forming candle to the edge of the data area (never
+        # into the axis gutter), read out top-left of the plot where the line chart's change
+        # figure stood, rolling on 8ths; ink until the breakout, accent above the level
         if last is not None:
             x, pc, _po = last
             y = Y(pc)
-            up = pc >= data[0][0]
             p = D.paint(ctx.pal("ink", 0.5), stroke=g.bl(0.25), cap_round=False)
             p.setPathEffect(skia.DashPathEffect.Make([g.bl(1), g.bl(1)], 0))
-            c.drawLine(x + slot * 0.5, y, g.x1, y, p)
-            bf = mono(ctx, T["meta"].px(g) * 1.1, 700)
-            txt = fmt(pc, 0 if pc >= 1000 else dec, pre)
-            bw, bh = D.text_w(bf, txt) + g.bl(2.5), g.bl(6)
-            with ctx.layer(0.9):
-                D.rrect(c, g.x1 - bw, y - bh / 2, bw, bh, g.bl(0.75), D.paint(ctx.pal("accent" if up else "neg")))
-                D.draw_text(c, txt, g.x1 - bw / 2, y, bf, ctx.pal("ink_dark"), valign="middle")
+            if dr.right() > x + slot * 0.5:
+                c.drawLine(x + slot * 0.5, y, dr.right(), y, p)
+            c.drawCircle(dr.right(), y, g.bl(0.6), D.paint(ctx.pal("ink", 0.7)))
+            q1 = math.floor(lb * 2 + 1e-9) / 2
+            pa, pb = self._last_at(q1 - 0.5), self._last_at(q1)
+            ur = E.clamp((lb - q1) / 0.35)
+            ndec = 0 if pc >= 1000 else dec
+            sa = fmt(pa if pa is not None else pb or pc, ndec, pre)
+            sb = fmt(pb if pb is not None else pc, ndec, pre)
+            mf = T["meta"].font(ctx, weight=600)
+            cf = mono(ctx, T["title"].px(g), 800)
+            y0 = plot.top() + g.bl(6)
+            u = _bu(ctx, 0.0, 0.5)
+            _rise(ctx, "LAST PRICE", dr.left(), y0, mf, ctx.pal("accent" if broke else "muted"), u,
+                  T["meta"].tk(ctx))
+            if u > 0:
+                fb = y0 + g.bl(3) + D.cap_height(cf)
+                c.save()
+                c.translate(0, (1 - ENTER(u)) * g.bl(4))
+                odometer(ctx, sa, sb, ur, dr.left(), fb, cf, ctx.pal("accent" if broke else "ink"))
+                c.restore()
         ctx.publish("plot", plot, labels=labels)
         self.chrome(ctx, g)
+
+    def _last_at(self, lb: float) -> float | None:
+        """Price of the newest visible candle at local beat lb (None before any is visible)."""
+        data = self._ohlc()
+        hist, live, f0, sweep = self._plan()
+        out = None
+        for i, (o, h, l_, cl) in enumerate(data):
+            vis = self._visible(i, hist, live, f0, sweep, lb)
+            if vis <= 0:
+                break
+            out = cl if i < hist else self._path_price(o, h, l_, cl, vis, int(self.p["seed"]) + i)[0]
+        return out
 
     @staticmethod
     def _visible(i: int, hist: int, live: int, f0: float, sweep: float, lb: float) -> float:
@@ -1087,9 +1225,8 @@ class Bars(DataScene):
             lab_base = bar_y - g.bl(2)
             hl = it.get("label") == self.p["highlight"]
             key = it.get("color") or ("accent" if hl else "muted")
-            # track on the cut (far layer), label rises in the first half beat
-            with ctx.layer(1.12):
-                c.drawRect(skia.Rect(g.x0, bar_y, g.x1, bar_y + bh), D.paint(ctx.pal("ink", 0.06)))
+            # track and label on the cut
+            c.drawRect(skia.Rect(g.x0, bar_y, g.x1, bar_y + bh), D.paint(ctx.pal("ink", 0.06)))
             D.draw_text(c, str(it.get("label", "")), g.x0, lab_base, lf, ctx.pal("ink"), align="left",
                         tracking=T["body"].tk(ctx, "display"))
             at = f0 + i * st
@@ -1190,6 +1327,10 @@ class StatGrid(DataScene):
             y = plot.top() + r_ * (ch + gap)
             at = f0 + i * st
             u = E.clamp((lb - at) / 0.5)
+            if self.cut_in and f0 <= 0:
+                # on a cut the grid is already landing (the cut frame is never a bare heading); the
+                # cascade still reads, card by card, in how far each has settled
+                u = max(u, 0.4 - 0.08 * i)
             if u <= 0:
                 continue
             e = ENTER(u)
@@ -1202,7 +1343,7 @@ class StatGrid(DataScene):
             D.rrect(c, card.left(), card.top(), card.width(), card.height(), g.bl(2), D.paint(ctx.pal("bg2", 0.9 * e)))
             # border draws around from the top-left
             bp = skia.Path()
-            bp.addRRect(skia.RRect.MakeRectXY(card, g.bl(2), g.bl(2)))
+            bp.addRRect(skia.RRect.MakeRectXY(card.makeInset(g.bl(0.125), g.bl(0.125)), g.bl(2), g.bl(2)))
             c.drawPath(D.partial_path(bp, SETTLE(u)), D.paint(ctx.pal("ink", 0.16), stroke=g.bl(0.25)))
             pad = g.bl(4)
             lab = kr.text(str(it.get("label", "")))
@@ -1211,7 +1352,8 @@ class StatGrid(DataScene):
             dec, pre, suf = int(it.get("decimals", 0)), str(it.get("prefix", "")), str(it.get("suffix", ""))
             final = fmt(val, dec, pre, suf)
             size = min(T["title"].px(g), (cw - 2 * pad) / (max(len(final), 3) * 0.6))
-            a, b, ur = stepped(lb, at + 0.25, max(land - at - 0.25, 0.25))
+            # figures step on 8ths: half as many rolls as 16ths, each long enough to read
+            a, b, ur = stepped(lb, at + 0.25, max(land - at - 0.25, 0.25), div=2.0)
             wght = int(400 + 400 * ENTER(E.clamp((lb - at) / max(land - at, 1e-6))))
             vf = mono(ctx, size, wght)
             vbase = card.top() + pad + D.cap_height(kf) + g.bl(5) + D.cap_height(vf)
@@ -1231,15 +1373,17 @@ class StatGrid(DataScene):
                 _rise(ctx, d.replace("-", MINUS), card.left() + pad + D.cap_height(df) + g.bl(1.5), dy, df, ctx.pal(key), du)
             # mini viz on the card floor
             vr = skia.Rect(card.left() + pad, card.bottom() - pad - ch * 0.26, card.right() - pad, card.bottom() - pad)
-            vu = E.clamp((lb - at - 0.25) / max(land - at, 0.5))
+            vu = E.clamp((lb - at - 0.25) / max(land - at - 0.25, 0.5))
             if it.get("gauge") is not None:
                 gmin, gmax = (it["gauge"] if isinstance(it["gauge"], list) else (0, 100))
                 fr_ = E.clamp((val - gmin) / max(gmax - gmin, 1e-9))
                 gy = vr.bottom() - g.bl(2)
                 c.drawRect(skia.Rect(vr.left(), gy - g.bl(1), vr.right(), gy + g.bl(1)), D.paint(ctx.pal("ink", 0.1)))
-                gw = vr.width() * fr_ * ENTER(vu)
+                # an even sweep that lands with the figures (in_out_sine; out_expo flung the knob
+                # across the card in a few frames and the smear dragged the card's text with it)
+                gw = vr.width() * fr_ * SCAN(vu)
                 c.drawRect(skia.Rect(vr.left(), gy - g.bl(1), vr.left() + gw, gy + g.bl(1)), D.paint(ctx.pal("accent")))
-                c.drawCircle(vr.left() + gw, gy, g.bl(1.8), D.paint(ctx.pal("ink")))
+                c.drawCircle(vr.left() + gw, gy, g.bl(1.5), D.paint(ctx.pal("ink")))
                 mf = mr.font(ctx, weight=500)
                 D.draw_text(c, str(int(gmin)), vr.left(), gy - g.bl(3), mf, ctx.pal("muted", e), align="left")
                 D.draw_text(c, str(int(gmax)), vr.right(), gy - g.bl(3), mf, ctx.pal("muted", e), align="right")
@@ -1351,7 +1495,7 @@ class Ticker(DataScene):
             # while row 0 is still the narrow hand-off card, stack symbol / price / pill like the card
             # it came from, and slide each piece into its row position as the card widens
             wt = E.clamp((row.width() / (g.x1 - g.x0) - 0.45) / 0.5)
-            mix = lambda p0, p1: p0 + (p1 - p0) * wt  # noqa: E731
+            mix = lambda p0, p1, wt=wt: p0 + (p1 - p0) * wt  # noqa: E731
             p_txt = fmt(p_new, dec, pre)
             sym_y = mix(row.top() + pad + D.cap_height(sf), cy - g.bl(0.5))
             D.draw_text(c, str(it.get("sym", "???")), row.left() + pad + ox, sym_y, sf, ctx.pal("ink", e),
@@ -1383,6 +1527,12 @@ class Ticker(DataScene):
             bh = g.bl(4)
             split = g.x0 + g.content_w * adv / max(n, 1)
             e = SETTLE(u)
-            c.drawRect(skia.Rect(g.x0, bt, g.x0 + (split - g.x0) * e - g.bl(0.5), bt + bh), D.paint(ctx.pal("accent")))
-            c.drawRect(skia.Rect(g.x1 - (g.x1 - split) * e + g.bl(0.5), bt, g.x1, bt + bh), D.paint(ctx.pal("neg")))
+            # each side grows from its own end; nothing is drawn until it has width (a negative
+            # width rect is a stray sliver at the edge)
+            aw = (split - g.x0) * e - g.bl(0.5)
+            nw = (g.x1 - split) * e - g.bl(0.5)
+            if aw > 0.5:
+                c.drawRect(skia.Rect(g.x0, bt, g.x0 + aw, bt + bh), D.paint(ctx.pal("accent")))
+            if nw > 0.5:
+                c.drawRect(skia.Rect(g.x1 - nw, bt, g.x1, bt + bh), D.paint(ctx.pal("neg")))
         self.chrome(ctx, g)

@@ -1,7 +1,9 @@
 // Data desk (crypto): a 30-beat editorial story at 120 BPM, every timing in beats.
 // ETH counter -> its sparkline grows into the 30-day line (match) -> the axes hand over to the
-// BTC candles (match) -> hard cut to dominance bars -> slice to the stat cards -> the first card
-// becomes the watchlist (match). Figures are illustrative; pass real ones from your data source.
+// BTC candles (match) -> hard cut to dominance bars -> cut to the stat cards -> the first card
+// becomes the watchlist (match) -> hard cut to the closing stat: Bitcoin's month in one figure,
+// drawn over the same closes as the candles. Figures are illustrative; pass real ones from your
+// data source.
 {
   "mode": "data",
   "music": { "style": "pulse", "bpm": 120 },
@@ -9,7 +11,8 @@
   "markers": [
     { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
     { "kind": "section", "at": "chart", "name": "body", "energy": 2 },
-    { "kind": "section", "at": "watch", "name": "peak", "energy": 3 }
+    { "kind": "section", "at": "watch", "name": "peak", "energy": 3 },
+    { "kind": "section", "at": "close", "name": "outro", "energy": 2 }
   ],
   "scenes": [
     { "type": "counter", "kicker": "Ethereum · spot", "heading": "Ether rallies",
@@ -17,19 +20,19 @@
       "spark": { "seed": 10, "n": 30, "start": 3100, "drift": 0.006, "vol": 0.025 }, "dur": "4b" },
     { "type": "line", "kicker": "ETH / USD · 30D", "heading": "Ether's month",
       "series": { "seed": 10, "n": 30, "start": 3100, "drift": 0.006, "vol": 0.025 },
-      "first": "1/2b", "draw": "3b", "x_labels": ["Oct 1", "Oct 15", "Oct 30"],
+      "first": "1/2b", "draw": "5/2b", "x_labels": ["Oct 1", "Oct 15", "Oct 30"],
       "events": [ { "i": 8, "text": "Monthly low" }, { "i": 24, "text": "ETF inflows" } ],
-      "transition": { "kind": "match", "element": "spark" }, "dur": "6b" },
+      "transition": { "kind": "match", "element": "spark" }, "dur": "4b" },
     { "type": "candles", "id": "chart", "kicker": "BTC / USD · 4H", "heading": "Bitcoin vs $70k",
       "seed": 21, "n": 30, "start": 64200, "end": 70840, "vol": 0.012, "level": 70000, "decimals": 0,
       "live": 3, "callout": "Closed above 70,000",
       "transition": { "kind": "match", "element": "plot" }, "dur": "6b" },
     { "type": "bars", "kicker": "Market share", "heading": "Half the market", "suffix": "%", "highlight": "BTC",
-      "first": "1b", "stagger": "1/2b", "grow": "1b", "callout": "More than all others combined",
+      "first": "0b", "stagger": "1/4b", "grow": "1b", "callout": "More than all others combined",
       "items": [ { "label": "BTC", "value": 54, "prev": 51.9 }, { "label": "ETH", "value": 17, "prev": 17.8 },
                  { "label": "USDT", "value": 5, "prev": 5.3 }, { "label": "SOL", "value": 3, "prev": 3.4 },
                  { "label": "Other", "value": 21, "prev": 21.6 } ],
-      "transition": "cut", "dur": "6b" },
+      "transition": "cut", "dur": "4b" },
     { "type": "stat_grid", "kicker": "The week in numbers", "heading": "By the numbers",
       "count": "2b", "stagger": "1/4b",
       "items": [
@@ -41,7 +44,7 @@
         { "label": "Open interest", "value": 38.4, "decimals": 1, "prefix": "$", "suffix": "B", "delta": "-2.1%",
           "spark": { "seed": 8, "n": 24, "start": 40, "drift": -0.002, "vol": 0.01 } }
       ],
-      "transition": { "kind": "slice", "dur": "1/2b" }, "dur": "4b" },
+      "transition": "cut", "dur": "4b" },
     { "type": "ticker", "id": "watch", "kicker": "Watchlist", "heading": "Live prices",
       "items": [
         { "sym": "BTC", "name": "Bitcoin", "price": 70840, "change": 2.4, "decimals": 0 },
@@ -50,6 +53,13 @@
         { "sym": "XRP", "name": "XRP", "price": 0.612, "change": 3.2, "decimals": 3 },
         { "sym": "DOGE", "name": "Dogecoin", "price": 0.152, "change": -1.6, "decimals": 3 }
       ],
-      "transition": { "kind": "match", "element": "card0" }, "dur": "4b" }
+      "transition": { "kind": "match", "element": "card0" }, "dur": "4b" },
+    { "type": "counter", "id": "close", "kicker": "The close · 30 days", "heading": "Bitcoin's month",
+      "value": 10.3, "decimals": 1, "prefix": "+", "suffix": "%", "color": "accent",
+      "label": "BTC / USD, Oct 1 to Oct 30 close", "delta": "+$6,640", "delta_note": "64,200 → 70,840",
+      "spark": [ 64200, 64839, 65909, 65350, 64718, 65047, 66451, 66829, 65974, 65432, 65450, 66248, 66300, 66078, 65961, 66155,
+                 65638, 65700, 65968, 67315, 67332, 68165, 67407, 68155, 68349, 67981, 68025, 68815, 68618, 70504, 70840 ],
+      "spark_prefix": "$", "spark_decimals": 0, "count": "2b",
+      "transition": "cut", "dur": "4b" }
   ]
 }

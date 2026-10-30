@@ -31,7 +31,7 @@ def test_scene_lengths_and_cuts_on_the_beat(film):
     tl = film.tl
     assert abs(tl.spb - 0.5) < 1e-9
     lengths = [round(tl.beats_of(sc.dur, sc.start), 6) for sc in film.scenes]
-    assert lengths == [4, 6, 6, 6, 4, 4]
+    assert lengths == [4, 4, 6, 4, 4, 4, 4]
     for sc in film.scenes[1:]:
         assert tl.on_grid(sc.start, 1.0, 0.001), sc.id
     assert 8.0 <= film.duration <= 15.0
@@ -140,3 +140,70 @@ def test_legacy_seconds_spec_still_renders():
     for sc in f.scenes:
         f.draw(s.getCanvas(), sc.start + sc.dur * 0.7)
     assert f.duration > 10
+
+
+def _bg(img):
+    return np.median(img[:, :8].reshape(-1, 3), axis=0)
+
+
+def test_content_stays_inside_the_margins(film):
+    """The camera is locked on the content plane: nothing but the ground sits in the 96 px side
+    margins between the safe lines, on any scene, early or late."""
+    spec = load_spec(SPEC_DIR)
+    for sc_spec in spec["scenes"]:
+        sc_spec["ground_style"] = "solid"  # the dotted ground lives in the margins by design
+    plain = Film(spec, W, H)
+    g = L.grid(W, H)
+    top, bot = int(g.safe_top), int(g.safe_bottom)
+    for sc in plain.scenes:
+        for t in (sc.start + 0.25, sc.start + sc.dur * 0.6, sc.end - 0.02):
+            img = _frame(plain, t)
+            band = np.abs(img[top:bot] - _bg(img)).max(axis=2) > 40
+            left, right = band[:, :int(g.x0) - 1], band[:, int(g.x1) + 1:]
+            assert left.sum() == 0 and right.sum() == 0, (sc.id, t, left.sum(), right.sum())
+
+
+def test_film_opens_on_the_title(film):
+    g = L.grid(W, H)
+    img = _frame(film, 0.0)
+    head = img[int(DS.DataScene.head_top(g)):int(DS.DataScene.head_top(g) + g.bl(16)), int(g.x0):int(g.x1)]
+    assert (np.abs(head - _bg(img)).max(axis=2) > 120).sum() > 2000
+
+
+def test_counter_counts_from_the_series_start(film):
+    sc = film.scenes[0]
+    assert abs(sc._from() - sc._spark()[0]) < 1e-9
+    closer = film.scenes[-1]
+    assert closer.type == "counter" and closer._from() == 0.0
+    assert DS.fmt(closer._value(), 1, "+", "%") == "+10.3%"
+
+
+def test_delta_false_hides_the_pill():
+    f = Film({"mode": "data", "scenes": [{"type": "counter", "value": 5, "delta": False, "dur": "4b"}]}, W, H)
+    assert f.scenes[0]._delta() == ""
+
+
+def test_breadth_bar_has_no_slivers_before_it_grows(film):
+    sc = next(s for s in film.scenes if s.type == "ticker")
+    g = L.grid(W, H)
+    plot = DS.DataScene.plot_rect(g)
+    band_top = int(plot.top() + plot.height() * 0.8)
+    for t in (sc.start + 0.05, sc.start + 0.3):
+        img = _frame(film, t)
+        rows = img[band_top:int(plot.bottom()) + 1, int(g.x0):int(g.x1)]
+        red = (rows[..., 0] > 180) & (rows[..., 1] < 120)
+        green = (rows[..., 1] > 180) & (rows[..., 0] < 120)
+        assert red.sum() == 0 and green.sum() == 0, t
+
+
+def test_candle_read_out_never_covers_the_axis(film):
+    """The last price is read out top-left of the plot; the axis gutter holds only its labels."""
+    sc = next(s for s in film.scenes if s.type == "candles")
+    g = L.grid(W, H)
+    plot = DS.DataScene.plot_rect(g)
+    gx = int(g.x1 - DS.DataScene.gutter_w(g)) + 4
+    for t in np.arange(sc.start + 0.5, sc.end, 0.25):
+        img = _frame(film, float(t))
+        gut = img[int(plot.top()):int(plot.bottom()), gx:int(g.x1)]
+        green = (gut[..., 1] > 180) & (gut[..., 0] < 120) & (gut[..., 2] < 200)
+        assert green.sum() < 40, (float(t), int(green.sum()))
