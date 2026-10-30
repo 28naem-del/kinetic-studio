@@ -108,7 +108,7 @@ def llms_full() -> str:
 
 
 FAMILIES = [("kinetic", "Kinetic type"), ("explainer", "Explainer"), ("promo", "Promo"), ("data", "Data"),
-            ("social", "Social"), ("common", "Any mode")]
+            ("social", "Social"), ("common", "Any mode"), ("clip", "Footage (any mode)")]
 
 
 def _cell(v: Any) -> str:

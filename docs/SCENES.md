@@ -1,6 +1,6 @@
 # Scene reference
 
-31 scene types. Any scene works in any mode; the mode only sets theme, music, camera feel,
+32 scene types. Any scene works in any mode; the mode only sets theme, music, camera feel,
 default transition and audit thresholds. The same information is live from the `list_scenes` MCP tool
 and `kstudio scenes -v`; the full JSON Schema comes from `get_schema`. Regenerate this page with
 `python docs/tools/generate.py --scenes`.
@@ -621,3 +621,31 @@ Editorial title card: tracked kicker on the shared top anchor, a balanced headli
 | `weight` | `null` |
 | `accent_line` | `-1` |
 | `sfx` | `"swish"` |
+
+## Footage (any mode)
+
+### `clip`
+
+Footage from a local video file: trim with `in`/`out` (seconds or beats, snapped with the grid), `fit` cover (with a `focus` point and a slow `zoom`) or contain, an optional `grade`, `blur` and `opacity`, a `scrim` that keeps type legible, an optional picture-in-picture `box`, and `over`: a list of scenes (title, callout, karaoke, counter ...) drawn on top of the footage. `end` = hold (freeze the last frame) or loop. `source` = {"swap": {...}} plays footage from the optional swap backend (see docs/SWAP.md) and falls back to the input video without it.
+
+| key | default |
+|---|---|
+| `src` | `""` |
+| `source` | `null` |
+| `in` | `0.0` |
+| `out` | `null` |
+| `speed` | `1.0` |
+| `end` | `"hold"` |
+| `fit` | `"cover"` |
+| `focus` | `[0.5, 0.5]` |
+| `zoom` | `[1.0, 1.06]` |
+| `ease` | `"move"` |
+| `opacity` | `1.0` |
+| `grade` | `null` |
+| `blur` | `0.0` |
+| `scrim` | `0.45` |
+| `box` | `null` |
+| `radius` | `24` |
+| `backdrop` | `"blur"` |
+| `sfx` | `null` |
+| `over` | `[]` |

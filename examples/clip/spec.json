@@ -1,0 +1,29 @@
+// Footage under type, beat-locked at 120 BPM (one beat = 0.5 s): four 4-beat clip scenes, 8 s.
+// footage.mp4 is 3 s of synthetic bokeh made by make_footage.sh (ffmpeg lavfi, no third-party
+// material). Each clip trims it on the beat ("in": "2b" starts one second in), fits it to the frame
+// and draws the scenes listed in "over" on top in their own windows.
+// title over full-bleed footage -> the counter counts over a slower, graded take (half speed) ->
+// karaoke over blurred footage that loops -> end card over a soft, slowed take.
+{
+  "mode": "social",
+  "creator": { "name": "Kinetic Studio", "handle": "@kineticstudio", "initials": "KS" },
+  "music": { "style": "lofi", "bpm": 120 },
+  "scenes": [
+    { "type": "clip", "id": "open", "src": "footage.mp4", "dur": "4b", "zoom": [1.0, 1.08],
+      "over": [ { "type": "title", "kicker": "Clip scene", "title": "Your footage, on the beat",
+                  "subtitle": "Titles, counters and karaoke composite over local video." } ] },
+    { "type": "clip", "id": "count", "src": "footage.mp4", "in": "2b", "speed": 0.5, "dur": "4b",
+      "grade": "ink", "focus": [0.3, 0.5], "transition": "wipe",
+      "over": [ { "type": "counter", "kicker": "Decoded once", "heading": "Frames reused", "value": 90,
+                  "label": "nearest-frame mapping at any fps", "spark": false, "count": "2b",
+                  "source": "footage.mp4 · 3 s · 30 fps" } ] },
+    { "type": "clip", "id": "words", "src": "footage.mp4", "dur": "4b", "end": "loop", "blur": 10,
+      "scrim": 0.55, "transition": "cut",
+      "over": [ { "type": "karaoke", "text": "Every word lands on the beat over the footage.",
+                  "backdrop": false, "audiogram": false, "per": 0.5 } ] },
+    { "type": "clip", "id": "end", "src": "footage.mp4", "in": "1b", "speed": 0.5, "dur": "4b", "blur": 4,
+      "scrim": 0.6, "transition": "flash",
+      "over": [ { "type": "end_card", "icon": "", "brand": "Kinetic Studio", "title": "Footage in any mode.",
+                  "body": "One clip scene, local ffmpeg, cached frames.", "handle": "@kineticstudio" } ] }
+  ]
+}
