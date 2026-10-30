@@ -22,6 +22,16 @@ def _t(dur: float) -> np.ndarray:
 
 # ---------------------------------------------------------------------- drums
 
+def tail_fade(x: np.ndarray, sec: float = 0.02) -> np.ndarray:
+    """Fade the last `sec` to zero: a decaying voice cut at a fixed length (a kick at -37 dB, a tom
+    at -26 dB) otherwise ends on a step, a click that onset detectors (and ears) read as a hit."""
+    k = min(len(x), int(sec * SR))
+    if k > 1:
+        x = x.copy()
+        x[-k:] *= np.linspace(1.0, 0.0, k, dtype=np.float32)
+    return x
+
+
 def kick(f_start: float = 210.0, f_end: float = 52.0, tau_p: float = 0.032, decay: float = 0.34,
          click: float = 0.5, drive: float = 2.2, seed: int = 1) -> np.ndarray:
     """808/909-style kick: sine with exponential pitch envelope, amp decay, 2-4 ms click, soft clip."""
@@ -34,7 +44,7 @@ def kick(f_start: float = 210.0, f_end: float = 52.0, tau_p: float = 0.032, deca
     clk = A.fft_filter(A.noise(n, seed), 1800, 9000) * np.exp(-t / 0.0028)
     blip = A.sine(1000.0, n) * np.exp(-t / 0.004) * 0.25
     x = A.softclip(body * 1.1 + (clk + blip) * click, drive)
-    return x.astype(np.float32)
+    return tail_fade(x).astype(np.float32)
 
 
 def snare(tone: tuple[float, float] = (185.0, 330.0), tone_decay: float = 0.07, noise_decay: float = 0.17,
@@ -100,7 +110,7 @@ def tom(f: float = 140.0, decay: float = 0.2, seed: int = 13) -> np.ndarray:
     t = _t(dur)
     x = A.sine(f * (1 + 0.9 * np.exp(-t / 0.04)), n) * np.exp(-t / decay)
     x += A.fft_filter(A.noise(n, seed), 1200, 7000) * np.exp(-t / 0.01) * 0.3
-    return A.softclip(x, 1.4)
+    return tail_fade(A.softclip(x, 1.4))
 
 
 def crash(seed: int = 15, decay: float = 1.1) -> np.ndarray:
@@ -109,7 +119,7 @@ def crash(seed: int = 15, decay: float = 1.1) -> np.ndarray:
     t = _t(dur)
     r = A.rng(seed)
     metal = np.zeros(n, np.float32)
-    for k in range(9):
+    for _k in range(9):
         f = r.uniform(340, 1400)
         metal += np.sign(np.sin(2 * np.pi * f * t + r.uniform(0, 6.28))).astype(np.float32)
     x = A.fft_filter(metal / 9, 4000, 18000) * 0.5 + A.fft_filter(A.noise(n, seed + 1), 3000, 17000)

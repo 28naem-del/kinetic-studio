@@ -164,6 +164,8 @@ def build_bed(film: Any, seed: int = 0) -> tuple[np.ndarray, dict]:
 UI_PITCH_SEMI = 0.5      # +- semitone pitch randomisation on short UI sounds
 VEL_JITTER = 0.06        # +- velocity randomisation per hit
 SNAP_TOL = 0.04          # anchors within this many seconds of the 16th grid are pulled onto it
+RISE_SOUNDS = {"riser", "riser_short", "reverse"}  # swells: their end, not their onset, is the event
+RISE_REACH = 0.25        # a swell looks this far past its natural end for the cut it should stop on
 
 
 def sfx_velocity(energy: float) -> float:
@@ -185,6 +187,9 @@ def place_sfx(film: Any, seed: int = 0) -> list[dict[str, Any]]:
               False, or music cfg `sfx_quantize` False, disables; `grid` sets the division per beat)
     align   = "start" (default; clip onset on the anchor), "peak" (the sound's PEAK lands on it) or
               "end" (the clip ends on it, for risers/reverses into a cut)
+              Rising sounds (RISE_SOUNDS) without an explicit align always end ON a cut: the first
+              boundary between the anchor and the clip's natural end (+ RISE_REACH) - so "drop-2b" or
+              an end card's own scene start both swell into the cut and stop there - else the anchor.
     velocity= marker `velocity`, else from the section energy (sfx_velocity) with a small jitter
     pitch   = marker `pitch` (semitones), else a small random offset for UI sounds."""
     mcfg = film.cfg.get("music", {})
@@ -218,6 +223,11 @@ def place_sfx(film: Any, seed: int = 0) -> list[dict[str, Any]]:
         pitch = round(pitch, 2)
         clip = synth.render(name, vel, pitch, (k % 7) + 1 if name in synth.UI_SOUNDS else 0)
         align = m.data.get("align", "start")
+        if name in RISE_SOUNDS and "align" not in m.data:
+            align = "end"
+            ln = len(clip) / SR
+            ahead = [b.t for b in getattr(film, "boundaries", []) if anchor - 1e-3 <= b.t <= anchor + ln + RISE_REACH]
+            anchor = min(ahead) if ahead else anchor
         if align == "peak":
             start = anchor - synth.peak_of(name, pitch)
         elif align == "end":

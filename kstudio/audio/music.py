@@ -9,7 +9,8 @@ explicitly: {"kind": "cue", "at": "drop", "music": "riser" | "fill" | "hit" | "b
 A cue marker named "music_stop" hard-stops the bed (e.g. under a logo sting).
 
 Signal flow per style: drum machine (808/909-style kick, snare/clap, closed + open hats on 16ths
-with accents, humanised timing) -> dry drum bus; filter-enveloped saturated bass; voice-led
+with accents and humanised velocity; every drum hit sits ON the straight 16th grid, so a cut, a
+caption pop or a beat-detecting editor lands with the kit; swing is left to keys/hook) -> dry drum bus; filter-enveloped saturated bass; voice-led
 chords on unison pads / FM keys; a 2-bar melodic hook on the style's scale; arps; per-voice
 reverb and dotted-8th ping-pong delay sends; kick-keyed sidechain ducking; glue compression,
 EQ (mud cut, air shelf) and soft saturation on the master. `plan()` exposes the arrangement.
@@ -48,7 +49,7 @@ class Style:
     prog: list[tuple[int, str]]     # 4-bar progression (root offset, chord quality)
     layers: dict[str, int]          # layer -> minimum energy
     sidechain: float = 0.0          # 0..1 depth scale of the kick-keyed ducking
-    swing: float = 0.0              # off-beat delay as a fraction of a beat (16ths get half)
+    swing: float = 0.0              # off-beat delay (fraction of a beat; 16ths get half) of keys/hook only
     lowpass: float = 16000.0
     gains: dict[str, float] = field(default_factory=dict)
     scale: str = "minor"
@@ -150,8 +151,8 @@ STYLES: dict[str, Style] = {
         hook=[(.5, .5, 4, .7), (1, .5, 2, .6), (1.5, 1, 1, .7), (3, .5, 0, .6), (4.5, .5, 4, .7), (5, .5, 5, .6),
               (5.5, 1, 4, .7), (7, 1, 2, .6)],
         hook_voice="ks",
-        drums={"bbkick": {1: "x.........x..x.."}, "snare": {1: "....x.......x..."}, "hat": {1: "x.xxx.xxx.xxx.xx"}},
-        bass_pat={1: "x.........x..x.."},
+        drums={"bbkick": {1: "x.......x.x....."}, "snare": {1: "....x.......x..."}, "hat": {1: "x.xxx.xxx.xxx.xx"}},
+        bass_pat={1: "x.......x.x....."},
         bass_voice={"cutoff": 140, "env_oct": 1.6, "decay": 0.15, "q": 0.9, "drive": 1.8, "len": 1.3, "wave": "tri",
                     "sub": 0.8},
         kick={"f_start": 140, "tau_p": 0.04, "decay": 0.3, "click": 0.35, "drive": 2.0},
@@ -399,7 +400,9 @@ def generate(style: str, tl: Timeline, duration: float, seed: int = 0, stop_at: 
     kp["f_end"] = min(62.0, max(42.0, kp["f_end"]))
     kick_c = I.kick(**kp)
     soft_kick = I.kick(f_start=kp.get("f_start", 150), f_end=kp["f_end"], tau_p=0.04, decay=0.22, click=0.2, drive=1.4)
-    bb_kick = A.fft_filter(kick_c, 0, 5000)
+    # padded before the (circular, zero-phase) filter and faded after: otherwise the attack wraps
+    # around into the clip's last samples and every boom-bap kick ends on a click
+    bb_kick = I.tail_fade(A.fft_filter(np.concatenate([kick_c, np.zeros(int(0.05 * SR), np.float32)]), 0, 5000))
     snares = [I.snare(seed=5 + i) for i in range(3)]
     if style == "lofi":
         snares = [A.fft_filter(s, 120, 9000) for s in snares]
@@ -425,7 +428,6 @@ def generate(style: str, tl: Timeline, duration: float, seed: int = 0, stop_at: 
             chord_cache[bar] = (root, tones, v)
         return chord_cache[bar]
 
-    hum = 0.007 if style == "lofi" else 0.004
     for b in range(first_b, total_beats + 1):
         tb = tl.beat_to_time(b)
         if tb > duration + 0.05:
@@ -438,34 +440,32 @@ def generate(style: str, tl: Timeline, duration: float, seed: int = 0, stop_at: 
         # ---------------------------------------------------------------- drums
         for s in range(4):
             step = beat * 4 + s
-            ts = step_time(b, s)
+            ts = tl.beat_to_time(b + s / 4)          # drums: straight 16ths (no swing, no timing hum)
             brk = in_break(ts)
             acc = _ACC[step % 4]
-            for name, bank, gain, human in (("kick", None, g.get("kick", 0.85), 0.0), ("softkick", None, g.get("kick", 0.6), 0.0),
-                                            ("bbkick", None, g.get("kick", 0.75), 0.0)):
+            for name, gain in (("kick", g.get("kick", 0.85)), ("softkick", g.get("kick", 0.6)),
+                               ("bbkick", g.get("kick", 0.75))):
                 p = pat(name, e)
                 if p and p[step % 16] == "x" and not brk:
                     clip = kick_c if name == "kick" else (soft_kick if name == "softkick" else bb_kick)
-                    tk = tl.beat_to_time(b + s / 4) if name != "bbkick" else ts
-                    bus.add("kick", clip, tk, gain * (1.0 if s == 0 else 0.8))
-                    kicks.append(tk)
+                    bus.add("kick", clip, ts, gain * (1.0 if s == 0 else 0.8))
+                    kicks.append(ts)
             p = pat("clap", e)
             if p and p[step % 16] == "x" and not brk:
                 bus.add("clap", claps[(b // 2) % 2], ts, 0.42 * ef)
             p = pat("snare", e)
             if p and p[step % 16] == "x" and not brk:
-                lag = 0.006 + float(rng.uniform(-0.004, 0.004)) if style == "lofi" else 0.0
-                bus.add("clap", snares[(b // 2) % 3], ts + lag, 0.5 * ef)
+                bus.add("clap", snares[(b // 2) % 3], ts, 0.5 * ef)
             p = pat("hat", e)
             ohp = pat("ohat", e)
             if p and p[step % 16] == "x" and not (ohp and ohp[step % 16] == "x"):
                 v = acc * ef * float(rng.uniform(0.88, 1.08))
-                bus.add("hats", hats_c[int(rng.integers(0, 4))], ts + float(rng.uniform(-hum, hum)),
+                bus.add("hats", hats_c[int(rng.integers(0, 4))], ts,
                         0.22 * v, pan=(0.55 if step % 2 else -0.35) + float(rng.uniform(-0.08, 0.08)))
             if ohp and ohp[step % 16] == "x":
                 # choke: open hat stops at the next closed-hat step
                 clip = hats_o[step // 4 % 2]
-                nxt = step_time(b, s + 2) - ts if s + 2 < 4 else tl.beat_to_time(b + (s + 2) / 4) - ts
+                nxt = tl.beat_to_time(b + (s + 2) / 4) - ts
                 k = int(max(0.03, nxt) * SR)
                 c2 = clip[:k].copy()
                 f = min(len(c2), int(0.006 * SR))
@@ -474,10 +474,10 @@ def generate(style: str, tl: Timeline, duration: float, seed: int = 0, stop_at: 
             p = pat("shaker", e)
             if p and p[step % 16] == "x":
                 v = acc * ef * float(rng.uniform(0.85, 1.1))
-                bus.add("hats", shk[step % 3], ts + float(rng.uniform(-hum, hum)), 0.2 * v, pan=-0.5 if step % 2 else 0.3)
+                bus.add("hats", shk[step % 3], ts, 0.2 * v, pan=-0.5 if step % 2 else 0.3)
             p = pat("rim", e)
             if p and p[step % 16] == "x" and not brk:
-                bus.add("perc", rims[step % 2], ts + float(rng.uniform(-hum, hum)), 0.2 * ef, pan=0.4)
+                bus.add("perc", rims[step % 2], ts, 0.2 * ef, pan=0.4)
         # ---------------------------------------------------------------- bass
         bp_keys = [k for k in st.bass_pat if k <= e] if on("bass", e) or on("sub", e) else []
         if bp_keys:
@@ -490,11 +490,11 @@ def generate(style: str, tl: Timeline, duration: float, seed: int = 0, stop_at: 
                 step = beat * 4 + s
                 if bpat[step % 16] != "x":
                     continue
-                ts = step_time(b, s)
+                ts = tl.beat_to_time(b + s / 4)      # locked to the (straight) kick
                 if in_break(ts):
                     continue
                 f = f0
-                if style == "lofi" and step % 16 == 13:
+                if style == "lofi" and step % 16 == 10:
                     f = f0 * 1.4983
                 if hop and (step // 4) % 2 == 1:
                     f = f0 * 2
