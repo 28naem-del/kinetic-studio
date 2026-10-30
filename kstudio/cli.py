@@ -6,7 +6,7 @@
   validate <spec> [--fix-hints] [--strict] schema + dry-build check, errors with JSON Pointer paths
   brief --mode m --text "..."              prompt pack (system + schema + examples + beat rules) for any LLM
   info <spec>                              resolved timeline (scenes, markers, beats) + grid lint
-  preview <spec> [--at 1.2,3]              stills + contact sheet (fast, single process)
+  preview <spec> [-o dir] [--at 1.2,3]     stills + contact sheet (fast, single process)
   render <spec> [-o out.mp4] [--preset reel|landscape|square] [--fps 30|60]
          [--quality draft|standard|high] [--4k] [--workers auto|N] [--fresh] [--snap [beat|8th|16th|bar]]
   audit <video> [--mode m] [--fps N] [--frames N]   motion / loudness / codec / fps / duration checks
@@ -371,8 +371,10 @@ def cmd_preview(a: argparse.Namespace) -> dict[str, Any]:
     secs = round(time.time() - t0, 2)
     if not a.json:
         print(f"{len(r['stills'])} stills in {secs:.1f}s -> {r['contact_sheet']}")
-    return {"stills": [os.path.abspath(p) for p in r["stills"]], "contact_sheet": os.path.abspath(r["contact_sheet"]),
-            "out_dir": os.path.abspath(out), "seconds": secs, "summary": r.get("summary"), "warnings": warns}
+    stills = [{**st, "path": os.path.abspath(st["path"])} for st in r["stills"]]
+    sheet = os.path.abspath(r["contact_sheet"]) if r.get("contact_sheet") else None
+    return {"stills": stills, "contact_sheet": sheet, "out_dir": os.path.abspath(out), "seconds": secs,
+            "summary": r.get("summary"), "warnings": warns}
 
 
 def _progress_bar(info: dict) -> None:
@@ -619,7 +621,7 @@ def build_parser(prog: str = "kinetic-studio") -> Parser:
     s.add_argument("-v", "--verbose", action="store_true", help="also list info-level lint items")
     s = add("preview", cmd_preview, "render stills + a contact sheet")
     s.add_argument("spec")
-    s.add_argument("--out")
+    s.add_argument("-o", "--out", help="directory for the stills and the contact sheet (default <project>/out/preview)")
     s.add_argument("--at", help="comma-separated times in seconds")
     s.add_argument("--preset", default="reel")
     s.add_argument("--scale", type=float, default=0.5)
