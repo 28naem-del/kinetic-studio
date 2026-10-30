@@ -516,7 +516,10 @@ class Diagram(Scene):
                 out = E.clamp(u * 2)
                 word, em = self._handed_word(ctx)
                 if word and out < 1:
-                    size = r.height() / em
+                    # shrink with the block on both axes so the whole word stays inside it
+                    tk = T["display"].tk(ctx, "display")
+                    w100 = D.text_w(T["display"].font(ctx, weight=700, size=100.0, face="display"), word, tk) / 100
+                    size = min(r.height() / em, (r.width() - 2 * g.bl(2)) / max(w100, 1e-3))
                     wf = T["display"].font(ctx, weight=700, size=max(size, 1.0), face="display")
                     wy = r.bottom() - PAD_B * size - EXIT(out) * r.height()
                     D.draw_text(c, word, r.left() + g.bl(2), wy, wf, txt, align="left",
