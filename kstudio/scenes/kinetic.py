@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import random
 
+import numpy as np
 import skia
 
 from .. import draw as D
@@ -158,8 +159,27 @@ def _chrome_rows(ctx: Ctx) -> tuple[float, float, float]:
     return base, rule_y, rule_y - g.bl(2)
 
 
+def _undo_camera(ctx: Ctx) -> None:
+    """Concat the inverse of the scene camera (dolly, bump, roll, drift, shake and any tilt),
+    so what follows is drawn in screen space. Transition transforms applied around the scene
+    still act on it, so the chrome leaves and enters with its shot."""
+    cam = ctx.cam
+    if cam is None:
+        return
+    inv = skia.Matrix()
+    if cam.matrix(1.0).invert(inv):
+        ctx.c.concat(inv)
+    t = cam.tilt()
+    if t is not None:
+        m = np.array([[t.rc(r, k) for k in range(4)] for r in range(4)], dtype=float)
+        if abs(float(np.linalg.det(m))) > 1e-12:
+            ctx.c.concat(skia.M44.Rows(*[skia.V4(*(float(v) for v in row)) for row in np.linalg.inv(m)]))
+
+
 def draw_chrome(ctx: Ctx, scene: Scene, ground: str, plate: bool = False) -> None:
-    """Chrome block on the bottom safe line, in three levels of emphasis.
+    """Chrome block on the bottom safe line, drawn in screen space (under the inverse of the
+    camera) so the push, beat bump and shake never carry it across the margins or the safe
+    line; it is the frame's HUD, the shot moves behind it.
 
     Label row (meta): scene number in the accent, the count and scene type quiet on the left;
     beat dot, tempo and a running beat counter on the right. Hairline: the scene's progress,
@@ -169,6 +189,15 @@ def draw_chrome(ctx: Ctx, scene: Scene, ground: str, plate: bool = False) -> Non
     for full-bleed scenes (marquee). Kept off the top line, which belongs to the handle."""
     if not _chrome_on(scene):
         return
+    ctx.c.save()
+    try:
+        _undo_camera(ctx)
+        _chrome_block(ctx, scene, ground, plate)
+    finally:
+        ctx.c.restore()
+
+
+def _chrome_block(ctx: Ctx, scene: Scene, ground: str, plate: bool) -> None:
     g = L.grid(ctx)
     c = ctx.c
     ink = _ink_on(ctx, ground)

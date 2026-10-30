@@ -138,6 +138,37 @@ def test_chrome_rows_sit_on_the_safe_line(film):
     assert K.content_floor(ctx, sc) < lab_y
 
 
+def _chrome_ink_box(film, sc, lt, cam=True):
+    ctx, surf = _ctx(film, sc, lt)
+    ctx.c.clear(skia.ColorTRANSPARENT)
+    if cam:
+        sc.camera(ctx)
+        # exaggerate the dolly, bump, roll and shake far past the mode's range
+        st = ctx.cam
+        st.z, st.bump, st.roll, st.sx, st.sy = 0.2, 0.08, 1.5, 30.0, -25.0
+        ctx.c.resetMatrix()
+        st.apply(ctx.c, 1.0)
+    K.draw_chrome(ctx, sc, sc.ground_at(lt))
+    a = surf.makeImageSnapshot().toarray()[..., 3]
+    ys, xs = np.nonzero(a > 8)
+    return ctx, (int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max()))
+
+
+@pytest.mark.parametrize("kind", ["slam", "countdown", "burst"])
+def test_chrome_stays_on_the_grid_under_the_camera(film, kind):
+    sc = _scene(film, kind)
+    lt = film.tl.spb * 2.5
+    ctx, box = _chrome_ink_box(film, sc, lt)
+    _, flat = _chrome_ink_box(film, sc, lt, cam=False)
+    g = L.grid(ctx)
+    x0, x1, y0, y1 = box
+    assert x0 >= g.x0 - 1 and x1 <= g.x1 + 1
+    assert y1 <= g.safe_bottom + g.bl(2) + 1  # ticker clip ends bl(2) under the baseline
+    assert y0 >= g.safe_top
+    # screen space: the camera does not move the chrome at all
+    assert all(abs(a - b) <= 1 for a, b in zip(box, flat))
+
+
 def _alpha_outside_word(film, sc, lt, **params):
     old = {k: sc.p[k] for k in params}
     sc.p.update(params)
