@@ -139,3 +139,86 @@ def spec_hash(spec: dict[str, Any], extra: Any = None) -> str:
     clean = {k: v for k, v in spec.items() if not k.startswith("_")}
     blob = json.dumps([clean, extra], sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
+
+
+# --------------------------------------------------------------------------- footage sources
+# A `clip` scene plays footage from `src` (a local file) or from a `source` object. The only source
+# kind today is `{"swap": {...}}`: footage made by an optional, remote ComfyUI backend (kstudio.swap).
+# Specs without a `source` are untouched, so this is fully backwards compatible.
+
+SWAP_MODES = ("simple", "object")
+SWAP_KEYS = ("video", "character", "mode", "prompt", "target", "seed")
+
+
+def swap_source(source: Any, base_dir: str = ".") -> dict[str, Any] | None:
+    """Normalise a clip scene's `source` value. Returns None when it is not a swap source, else
+    {"video", "character" (absolute paths), "mode", "prompt", "target", "seed"}; raises SpecError on bad input."""
+    if source is None or source == {}:
+        return None
+    if not isinstance(source, dict) or set(source) - {"swap"}:
+        raise SpecError('clip "source" must be {"swap": {...}}')
+    sw = source.get("swap")
+    if not isinstance(sw, dict):
+        raise SpecError('clip "source.swap" must be an object with "video" and "character"')
+    unknown = sorted(set(sw) - set(SWAP_KEYS))
+    if unknown:
+        raise SpecError(f'clip "source.swap" has unknown keys {unknown}; allowed: {list(SWAP_KEYS)}')
+    for k in ("video", "character"):
+        if not isinstance(sw.get(k), str) or not sw[k]:
+            raise SpecError(f'clip "source.swap.{k}" must be a file path')
+    mode = sw.get("mode", "simple")
+    if mode not in SWAP_MODES:
+        raise SpecError(f'clip "source.swap.mode" must be one of {list(SWAP_MODES)}, got {mode!r}')
+    seed = sw.get("seed", 0)
+    if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
+        raise SpecError('clip "source.swap.seed" must be a non-negative integer')
+
+    def _abs(p: str) -> str:
+        p = os.path.expanduser(p)
+        return p if os.path.isabs(p) else os.path.normpath(os.path.join(base_dir, p))
+
+    return {"video": _abs(sw["video"]), "character": _abs(sw["character"]), "mode": mode,
+            "prompt": str(sw.get("prompt", "")), "target": str(sw.get("target", "")), "seed": seed}
+
+
+def _file_digest(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def swap_key(req: dict[str, Any]) -> str:
+    """Content key of a swap request: the bytes of both inputs plus every setting (16 hex chars)."""
+    parts = [_file_digest(req["video"]), _file_digest(req["character"]), req["mode"], req["prompt"],
+             req.get("target", ""), int(req.get("seed", 0))]
+    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()[:16]
+
+
+def swap_dir(base_dir: str) -> str:
+    """Job folder swapped footage is downloaded into: $KSTUDIO_SWAP_DIR, else <project>/out/swap."""
+    return os.environ.get("KSTUDIO_SWAP_DIR") or os.path.join(base_dir, "out", "swap")
+
+
+def swap_requests(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every swap source in a spec's clip scenes (and clip scenes nested in `over`), normalised, each with
+    its scene path ("/scenes/2") under "path"."""
+    base = str(spec.get("_dir", "."))
+    out: list[dict[str, Any]] = []
+
+    def visit(scenes: Any, path: str) -> None:
+        if not isinstance(scenes, list):
+            return
+        for i, sc in enumerate(scenes):
+            if not isinstance(sc, dict):
+                continue
+            if sc.get("type") == "clip" and sc.get("source") is not None:
+                req = swap_source(sc["source"], base)
+                if req is not None:
+                    req["path"] = f"{path}/{i}"
+                    out.append(req)
+            visit(sc.get("over"), f"{path}/{i}/over")
+
+    visit(spec.get("scenes"), "/scenes")
+    return out
