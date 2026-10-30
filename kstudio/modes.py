@@ -15,10 +15,10 @@ THEMES: dict[str, dict[str, Any]] = {
         "display": "Archivo", "body": "Inter", "mono": "JetBrainsMono", "ground_style": "solid",
         "grade": "ink",
     },
-    "lab": {  # explainer: deep navy, clinical teal, warm amber for emphasis
-        "bg": "#0a1520", "bg2": "#10273a", "paper": "#edf3f6", "accent": "#38d6c4", "accent2": "#ffb547",
-        "ink": "#edf3f6", "ink_dark": "#0a1520", "muted": "#7f95a8", "pos": "#38d6c4", "neg": "#ff7a6b",
-        "display": "Fraunces", "body": "Inter", "mono": "JetBrainsMono", "ground_style": "grid",
+    "lab": {  # explainer: editorial cool paper, navy ink, cobalt for the subject, signal orange for notes
+        "bg": "#eef0eb", "bg2": "#dfe3dc", "paper": "#fbfcf8", "accent": "#1f47ff", "accent2": "#ff5a24",
+        "ink": "#0e1a26", "ink_dark": "#0e1a26", "muted": "#69737c", "pos": "#0f9d7a", "neg": "#e5422b",
+        "display": "Fraunces", "body": "Inter", "mono": "JetBrainsMono", "ground_style": "solid",
     },
     "studio": {  # product promo: ink violet gradient, electric violet + cyan
         "bg": "#110d2a", "bg2": "#2a1c78", "paper": "#ffffff", "accent": "#8b6cff", "accent2": "#22d3ee",
@@ -53,9 +53,9 @@ MODES: dict[str, dict[str, Any]] = {
         "description": "Explainer / education: calm pacing, title cards, labelled diagrams, sources, disclaimer.",
         "theme": "lab",
         "music": {"style": "calm", "bpm": 84},
-        "camera": {"push": 0.05, "roll": 0.0, "shake": 0.15, "bump": 0.0, "drift": 14, "drift_hz": 0.3,
+        "camera": {"push": 0.035, "roll": 0.0, "shake": 0.1, "bump": 0.004, "drift": 6, "drift_hz": 0.25,
                    "carry": "world", "ground_depth": 3.0},
-        "post": {"bloom": 0.18, "grain": 0.03, "vignette": 0.3, "chroma": 0.0},
+        "post": {"bloom": 0.0, "grain": 0.05, "vignette": 0.18, "chroma": 0.0, "grade": "lab"},
         "transition": "cross",
         "audit": {"max_hold": 3.5, "min_motion": 0.45},
     },

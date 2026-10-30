@@ -1,36 +1,54 @@
-// Explainer / education: calm pacing, labelled diagram, citation lower-third, summary end card.
+// Explainer / education: an editorial primer locked to 84 BPM. 3 + 4 + 5 + 4 + 4 = 20 beats
+// (five bars, 14.29 s). Every cut is on a beat and the end card lands on the bar line (beat 16).
+// Grammar: masked wipe -> match cut ("Cache" becomes the L1 bar) -> half-beat push -> hard cut.
 {
   "mode": "explainer",
   "handle": "@kineticstudio",
   "progress": true,
+  "snap": "16th",
   "music": { "style": "calm", "bpm": 84 },
   "markers": [
     { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
     { "kind": "section", "at": "hierarchy", "name": "body", "energy": 2 },
     { "kind": "section", "at": "outro", "name": "outro", "energy": 0 }
   ],
-  "sources": [
-    { "at": "hierarchy+0.8", "dur": 2.3, "tag": "Source",
-      "text": "Hennessy & Patterson, Computer Architecture, 6th ed." }
-  ],
   "scenes": [
-    { "type": "title", "kicker": "HARDWARE 101", "title": "How does a\nCPU cache work?", "subtitle": "A 15-second primer", "dur": 2.2 },
-    { "type": "definition", "term": "Cache", "phonetic": "/kash/", "pos": "noun · hardware",
+    { "type": "cover", "id": "cover", "index": "01", "kicker": "Hardware 101", "page": "01 / 04",
+      "title": "How does a\nCPU cache\nwork?", "accent": "cache", "subtitle": "A 15-second primer", "dur": "3b" },
+    { "type": "definition", "id": "term", "index": "02", "kicker": "Definition", "page": "02 / 04",
+      "term": "Cache", "phonetic": "/kash/", "pos": "noun · hardware",
       "definition": "A small, very fast memory next to the CPU that keeps copies of recently used data.",
-      "note": "Hits are fast; misses go to RAM", "dur": 2.6 },
-    { "type": "diagram", "id": "hierarchy", "kicker": "MEMORY HIERARCHY", "heading": "Closer is faster",
+      "stats": [ { "label": "Hit · L1", "value": "1 ns" }, { "label": "Miss · RAM", "value": "80 ns" } ],
+      "transition": { "kind": "wipe", "shape": "rect", "dir": "down", "dur": "1b", "edge": false, "soft": 0 },
+      "dur": "4b" },
+    { "type": "diagram", "id": "hierarchy", "index": "03", "kicker": "Memory hierarchy", "page": "03 / 04",
+      "heading": "Closer is faster", "caption": "Each level is bigger and slower.", "layout": "ladder",
       "nodes": [
-        { "id": "C", "label": "CPU", "sub": "Registers" },
-        { "id": "L1", "label": "L1", "sub": "~1 ns" },
-        { "id": "L2", "label": "L2", "sub": "~4 ns" },
-        { "id": "R", "label": "RAM", "sub": "~80 ns" }
+        { "id": "L1", "label": "L1", "sub": "32 KB", "value": "1 ns" },
+        { "id": "L2", "label": "L2", "sub": "1 MB", "value": "4 ns" },
+        { "id": "L3", "label": "L3", "sub": "32 MB", "value": "12 ns" },
+        { "id": "RAM", "label": "RAM", "sub": "16 GB", "value": "80 ns" }
       ],
-      "callouts": [ { "node": "L1", "text": "smallest", "side": "up" }, { "node": "R", "text": "largest", "side": "up" } ],
-      "caption": "Each level is bigger and slower", "stagger": 0.4, "dur": 4.0 },
-    { "type": "bullets", "id": "why", "kicker": "WHY IT WORKS", "heading": "Locality",
-      "items": ["Reused data stays close", "Neighbours load together", "Misses fetch a whole line"],
-      "stagger": 0.7, "dur": 3.0 },
+      "edges": [
+        { "from": "L1", "to": "L2", "style": "arrow", "label": "miss" },
+        { "from": "L2", "to": "L3", "style": "arrow", "label": "miss" },
+        { "from": "L3", "to": "RAM", "style": "arrow", "label": "miss" }
+      ],
+      "callouts": [ { "node": "L1", "text": "fastest" }, { "node": "RAM", "text": "80× slower than L1" } ],
+      "first": "0b", "stagger": "1/2b", "camera": { "truck": 40 },
+      "transition": { "kind": "match", "element": "term" }, "dur": "5b" },
+    { "type": "bullets", "id": "why", "index": "04", "kicker": "Why it works", "page": "04 / 04",
+      "heading": "Locality",
+      "items": [
+        { "text": "Recently used data stays close", "detail": "Temporal locality: loops reuse the same values." },
+        { "text": "Neighbours arrive together", "detail": "Spatial locality: each miss fetches a 64-byte line." },
+        { "text": "Walk memory in order", "detail": "Sequential access turns most misses into hits." }
+      ],
+      "first": "1b", "stagger": "1b",
+      "transition": { "kind": "push", "dir": "up", "dur": "1/2b" }, "dur": "4b" },
     { "type": "end_card", "id": "outro", "icon": "book", "title": "Keep data close.", "body": "Fast code is cache-friendly code.",
-      "small": "Approximate latencies · typical desktop CPU", "handle": "@kineticstudio", "dur": 2.6 }
+      "small": "Latencies approximate, typical desktop CPU. Source: Hennessy & Patterson, Computer Architecture, 6th ed.",
+      "handle": "@kineticstudio",
+      "transition": { "kind": "cut", "on": "downbeat" }, "dur": "4b" }
   ]
 }
