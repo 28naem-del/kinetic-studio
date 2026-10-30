@@ -195,7 +195,10 @@ def test_cli_extension_hook_registers_swap(capsys, monkeypatch):
 
 
 def test_cli_without_extension_has_no_swap(capsys, monkeypatch):
-    monkeypatch.setitem(sys.modules, "kstudio.swap", None)  # import of kstudio.swap raises ImportError
+    """Simulate an install without the add-on, even when a real kstudio/swap.py is present."""
+    import kstudio
+    monkeypatch.setitem(sys.modules, "kstudio.swap", None)  # a fresh import of kstudio.swap raises ImportError
+    monkeypatch.delattr(kstudio, "swap", raising=False)  # and `from kstudio import swap` cannot use the attribute
     with pytest.raises(SystemExit) as e:
         cli.main(["swap", "--video", "clip.mp4", "--json"])
     assert e.value.code == 2 and json.loads(capsys.readouterr().out)["error"]["code"] == "USAGE"
@@ -231,7 +234,18 @@ print(json.dumps({"names": names, "call": M.run_tool("kstudio_swap_video", {"vid
     assert d["audit_builtin"] is True and "name is taken" in r.stderr
 
 
-def test_mcp_without_extension_keeps_the_built_in_tools():
-    from kstudio import mcp_server as M
-    assert [t.name for t in M.TOOLS] == ["list_modes", "list_scenes", "get_schema", "validate_spec", "new_spec",
-                                         "preview", "render", "audit"]
+def test_mcp_without_extension_keeps_the_built_in_tools(tmp_path):
+    """Without the add-on (simulated in a fresh interpreter) the MCP server lists exactly the built-in tools."""
+    code = r'''
+import json, sys
+sys.modules["kstudio.swap"] = None
+from kstudio import mcp_server as M
+print(json.dumps({"tools": [t.name for t in M.TOOLS], "listed": [t["name"] for t in M.tool_list()]}))
+'''
+    env = dict(os.environ, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=str(tmp_path),
+                       timeout=120)
+    assert r.returncode == 0, r.stderr[-2000:]
+    d = json.loads(r.stdout)
+    built_in = ["list_modes", "list_scenes", "get_schema", "validate_spec", "new_spec", "preview", "render", "audit"]
+    assert d["tools"] == built_in and d["listed"] == built_in
