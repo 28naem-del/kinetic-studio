@@ -12,12 +12,16 @@ PRESETS: dict[str, tuple[int, int]] = {
     "portrait": (1080, 1350),   # 4:5 feed
 }
 
-# quality -> (motion-blur subsamples, shutter angle in degrees, x264 crf, x264 preset)
+# quality -> (motion-blur base subsamples, shutter angle in degrees, x264 crf, x264 preset)
+# The compositor is velocity-aware: still frames use 2 samples, slow ones 3, moving ones the base
+# count, and fast moves (whips, zooms) are subdivided up to SAMPLE_CAP so sub-frames sit <= ~4 px apart.
 QUALITY: dict[str, tuple[int, float, int, str]] = {
     "draft": (1, 0.0, 26, "veryfast"),
-    "standard": (3, 180.0, 19, "medium"),
-    "high": (5, 216.0, 16, "slow"),
+    "standard": (8, 180.0, 19, "medium"),
+    "high": (16, 180.0, 16, "slow"),
 }
+# quality -> max sub-frames per frame when the motion needs it
+SAMPLE_CAP: dict[str, int] = {"draft": 1, "standard": 32, "high": 64}
 
 
 @dataclass
@@ -31,6 +35,7 @@ class Output:
     x264_preset: str
     preset: str
     quality: str
+    max_samples: int = 0  # 0 = 4 x samples
 
     @property
     def aspect(self) -> str:
@@ -69,4 +74,4 @@ def make_output(preset: str = "reel", fps: int = 30, quality: str = "standard",
     if scale != 1.0:
         w, h = int(round(w * scale / 2) * 2), int(round(h * scale / 2) * 2)
     s, sh, crf, xp = QUALITY[quality]
-    return Output(w, h, fps, s, sh, crf, xp, preset, quality)
+    return Output(w, h, fps, s, sh, crf, xp, preset, quality, SAMPLE_CAP.get(quality, s * 4))
