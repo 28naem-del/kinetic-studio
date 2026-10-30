@@ -6,9 +6,11 @@ swapping, scaled down when kern.memorystatus_level reports pressure); psutil; a 
 
 Worker cap. Besides free RAM and CPUs, the worker count is bounded by a total-RSS budget,
 RSS_BUDGET_MB (default 3000 MB, env KSTUDIO_RSS_BUDGET_MB; 0 disables): parent process
-(PARENT_MB) + n x per_worker_mb() must fit. At 1080x1920 that is (3000 - 400) // 545 = 4 workers,
+(PARENT_MB) + n x per_worker_mb() must fit. At 1080x1920 that is (3000 - 150) // 900 = 3 workers
+(estimate 2850 MB; measured peak of the whole process tree 2.7-2.8 GB with workers and encoders),
 so a 1080p render stays under ~3 GB total RSS even when the laptop is under memory pressure
-and other renders are running; free-RAM headroom can only lower it further.
+and another render holds the second render-lock slot; free-RAM headroom can only lower it further.
+720x1280 gets 5 workers (~2.85 GB).
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ import subprocess
 import sys
 
 RSS_BUDGET_MB = 3000.0   # total RSS (parent + workers + their encoders) a render may use
-PARENT_MB = 400.0        # parent process: film/timeline, audio mix, concat/mux
+PARENT_MB = 150.0        # parent process while workers run (measured 40-50 MB; audio/mux run after the workers exit)
 
 
 def _sysctl(name: str) -> int | None:
@@ -90,11 +92,13 @@ def cpu_count() -> int:
 
 
 def per_worker_mb(width: int, height: int, samples: int = 3) -> float:
-    """Footprint of one render worker: Python+Skia+NumPy/OpenCV runtime (~250 MB), frame buffers
-    and post temporaries (~64 B/px) and its x264 encoder (~70 B/px at medium). Calibrated on an
-    8-CPU box: 7 workers at 1080x1920 peaked at 3.8 GB RSS total (~545 MB each)."""
+    """Peak footprint of one render worker plus its x264 encoder: Python+Skia+NumPy/OpenCV runtime
+    (~250 MB) + frame buffers and post temporaries (~120 B/px) + the libx264 process (~185 B/px with
+    lookahead at the standard preset). Calibrated on an M-series 24 GB laptop rendering the kinetic
+    example at 1080x1920: worker processes peaked at 365-498 MB and their encoders at 234-384 MB,
+    i.e. up to ~880 MB per worker (this formula: ~900 MB at 1080x1920, ~540 MB at 720x1280)."""
     px = width * height
-    return 250.0 + px * (64 + 70) / 1e6 + (8 * px / 1e6 if samples > 1 else 0)
+    return 250.0 + px * (120 + 185) / 1e6 + (8 * px / 1e6 if samples > 1 else 0)
 
 
 def auto_workers(width: int, height: int, samples: int = 3, reserve_mb: float = 900.0,

@@ -24,6 +24,8 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
+import numpy as np
+
 from .presets import Output
 
 
@@ -266,7 +268,31 @@ def video_timing(path: str) -> dict[str, Any]:
 
 
 MUX_CEILING_DBTP = -1.0   # delivery true-peak ceiling measured on the encoded AAC track
-MUX_MAX_TRIES = 4
+MUX_MAX_TRIES = 6         # encodes: up to 2 local trims, then whole-file gain steps
+
+
+def _local_trim(src: np.ndarray, decoded: np.ndarray, ceiling_db: float, margin_db: float = 0.2,
+                block: int = 1024) -> tuple[np.ndarray, list[dict[str, float]]]:
+    """Pull the pre-encode audio down only where the *encoded* audio overshoots: per AAC frame
+    (1024 samples) whose decoded true peak exceeds the ceiling, a raised-cosine dip of
+    (overshoot + margin) dB spanning the frame and its neighbours. Loudness is untouched."""
+    from .audio import dsp as A
+    n = min(len(src), len(decoded))
+    env = A.true_peak_env(decoded[:n])
+    ceil = 10 ** (ceiling_db / 20)
+    g = np.ones(len(src), np.float32)
+    fixes = []
+    for k in range(0, n, block):
+        pk = float(env[k:k + block].max())
+        if pk <= ceil:
+            continue
+        over = float(20 * np.log10(pk / ceil)) + margin_db
+        a, b = max(0, k - 2 * block), min(len(src), k + 3 * block)
+        w = np.hanning(b - a + 2)[1:-1].astype(np.float32)
+        w = np.minimum(1.0, w * 2.0)  # flat-topped dip
+        g[a:b] = np.minimum(g[a:b], 1 - (1 - 10 ** (-over / 20)) * w)
+        fixes.append({"t": round(k / A.SR, 4), "over_db": round(over - margin_db, 2)})
+    return (src * g[:, None]).astype(np.float32), fixes
 
 
 def mux(video: str, audio: str, out_path: str, ceiling_dbtp: float = MUX_CEILING_DBTP,
@@ -278,9 +304,12 @@ def mux(video: str, audio: str, out_path: str, ceiling_dbtp: float = MUX_CEILING
       audio is a few ms short it trims the video track and the delivered rate/frame count drifts
       (e.g. 330 frames over 10.967 s = 30.091 fps).
     * True peak and integrated loudness are measured on the final file (ffmpeg EBU R128, after the
-      AAC encode). If the codec pushed the true peak over `ceiling_dbtp`, the audio is re-encoded with
-      the pre-encode gain lowered by the overshoot (+0.1 dB), up to `max_tries` encodes.
+      AAC encode). If the codec pushed the true peak over `ceiling_dbtp`, the pre-encode audio is
+      lowered by the overshoot (+0.2 dB) where it happens (the AAC frames that went over, found by
+      decoding the result), and re-encoded; if two local trims do not converge, the whole pre-encode
+      gain is lowered by the overshoot (+0.2 dB) per encode instead. At most `max_tries` encodes.
     Returns the measurements; raises if the mux itself fails."""
+    from .audio import dsp as A
     from .audio.mix import measure
     vt = video_timing(video)
     fps = vt["r_fps"] or vt["avg_fps"]
@@ -288,22 +317,38 @@ def mux(video: str, audio: str, out_path: str, ceiling_dbtp: float = MUX_CEILING
     gain_db = 0.0
     attempts: list[dict[str, Any]] = []
     loud: dict[str, Any] = {}
-    for _ in range(max(1, max_tries)):
-        af = (f"volume={gain_db:.2f}dB," if gain_db else "") + "apad"
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", video, "-i", audio,
-               "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", af, "-c:a", "aac", "-b:a", "192k",
-               "-ar", "48000"]
-        if dur > 0:
-            cmd += ["-t", f"{dur:.6f}"]
-        r = subprocess.run(cmd + ["-movflags", "+faststart", out_path], capture_output=True, text=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"mux failed: {r.stderr[-800:]}")
-        loud = measure(out_path)
-        attempts.append({"gain_db": round(gain_db, 2), "lufs": loud["lufs"], "true_peak": loud["true_peak"]})
-        over = loud["true_peak"] - ceiling_dbtp
-        if over <= 0:
-            break
-        gain_db -= over + 0.1
+    src_path, tmp = audio, out_path + ".trim.wav"
+    src: np.ndarray | None = None
+    try:
+        for i in range(max(1, max_tries)):
+            af = (f"volume={gain_db:.2f}dB," if gain_db else "") + "apad"
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", video, "-i", src_path,
+                   "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", af, "-c:a", "aac", "-b:a", "192k",
+                   "-ar", "48000"]
+            if dur > 0:
+                cmd += ["-t", f"{dur:.6f}"]
+            r = subprocess.run(cmd + ["-movflags", "+faststart", out_path], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError(f"mux failed: {r.stderr[-800:]}")
+            loud = measure(out_path)
+            att: dict[str, Any] = {"gain_db": round(gain_db, 2), "lufs": loud["lufs"], "true_peak": loud["true_peak"]}
+            attempts.append(att)
+            over = loud["true_peak"] - ceiling_dbtp
+            if over <= 0 or i == max_tries - 1:
+                break
+            if i < min(2, max_tries - 2):  # local fix first
+                if src is None:
+                    src = A.read_audio(audio)
+                src, fixes = _local_trim(src, A.read_audio(out_path), ceiling_dbtp - 0.05)
+                att["local_trims"] = fixes
+                if fixes:
+                    A.write_wav(tmp, src)
+                    src_path = tmp
+                    continue
+            gain_db -= over + 0.2
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
     ot = video_timing(out_path)
     want = vt["r_fps"]
     fps_ok = bool(want and abs(ot["r_fps"] - want) < 1e-3 and abs(ot["avg_fps"] - want) < 1e-3

@@ -331,16 +331,16 @@ DEBUG_STEMS: dict[str, np.ndarray] | None = None     # set to {} to capture the 
 def _duck(n: int, kicks: list[float], spb: float, depth_db: float) -> np.ndarray:
     if depth_db <= 0 or not kicks:
         return np.ones(n, np.float32)
-    imp = np.zeros(n, np.float32)
     pre = int(0.002 * SR)
-    for t in kicks:
-        k = int(t * SR) - pre
-        if 0 <= k < n:
-            imp[k] = 1.0
     rel = max(int(0.7 * spb * SR), 64)
     u = np.arange(rel, dtype=np.float32) / rel
     ker = np.concatenate([np.linspace(0, 1, pre * 2, endpoint=False, dtype=np.float32), (1 - u) ** 2])
-    env = np.clip(np.convolve(imp, ker)[:n], 0, 1)
+    env = np.zeros(n, np.float32)
+    for k in sorted({int(t * SR) - pre for t in kicks}):   # sparse convolution of kick impulses with ker
+        if 0 <= k < n:
+            m = min(len(ker), n - k)
+            env[k:k + m] += ker[:m]
+    env = np.clip(env, 0, 1)
     depth = 1 - 10 ** (-depth_db / 20)
     return (1 - depth * env).astype(np.float32)
 

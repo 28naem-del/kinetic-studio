@@ -24,16 +24,22 @@ def _norm(x: np.ndarray, peak: float = 0.9) -> np.ndarray:
 
 
 def whoosh(dur: float = 0.55, peak: float = 0.18, lo: float = 350, hi: float = 3200, seed: int = 1) -> np.ndarray:
+    """Air whoosh: band sweep up to the peak and back down, independent noise per channel (wide)
+    plus a left-to-right motion pan."""
     n = int(dur * SR)
-    t = A.tvec(dur)
-    x = A.pink(n, seed) * 0.6 + A.noise(n, seed + 3) * 0.4
+    t = A.tvec(dur)[:n]
     u = np.clip(t / peak, 0, 1)
     d = np.clip((t - peak) / (dur - peak), 0, 1)
     centre = lo + (hi - lo) * (u ** 1.5) * (1 - d) + d * (hi * 0.35)
-    y = A.stft_sweep(x, centre, q=0.9, n_fft=512)
-    y *= A.env_ad(n, peak, peak, (dur - peak) / 3, 2.4)
-    p = np.clip((t / dur) * 2 - 1, -1, 1) * 0.7
-    return _norm(A.pan(y, p), 0.85)
+    env = A.env_ad(n, peak, peak, (dur - peak) / 3, 2.4)
+    ch = []
+    common = A.pink(n, seed + 51) * 0.6 + A.noise(n, seed + 53) * 0.4
+    for c in range(2):
+        x = (A.pink(n, seed + 17 * c) * 0.6 + A.noise(n, seed + 3 + 17 * c) * 0.4) * 0.75 + common * 0.6
+        ch.append(A.stft_sweep(x, centre * (1.0 + 0.06 * c), q=0.9, n_fft=512) * env)
+    p = np.clip((t / dur) * 2 - 1, -1, 1) * 0.6
+    y = np.stack([ch[0] * np.sqrt(0.5 * (1 - p)), ch[1] * np.sqrt(0.5 * (1 + p))], 1)
+    return _norm(y, 0.85)
 
 
 def whoosh_big() -> np.ndarray:
@@ -75,16 +81,25 @@ def reverse() -> np.ndarray:
     return _norm(x[::-1].copy(), 0.6)
 
 
+def _dnoise(n: int, seed: int, lo: float, hi: float) -> np.ndarray:
+    """Decorrelated stereo band noise (independent L/R), for wide transients and tails."""
+    return np.stack([A.fft_filter(A.noise(n, seed), lo, hi), A.fft_filter(A.noise(n, seed + 101), lo, hi)], 1)
+
+
 def impact(seed: int = 41, size: float = 1.0) -> np.ndarray:
+    """Cinematic hit: pitch-dropping sub body (mono, short), wide decorrelated crack and click,
+    a stereo low-mid tail and a bright room, so the hit has weight *and* reads on phone speakers."""
     dur = 0.9 * size + 0.3
     n = int(dur * SR)
-    t = A.tvec(dur)
+    t = A.tvec(dur)[:n]
     f = 45 + 110 * np.exp(-t / 0.045)
-    body = A.sine(f, n) * np.exp(-t / (0.32 * size))
-    click = A.fft_filter(A.noise(n, seed), 1500, 9000) * np.exp(-t / 0.006)
-    tail = A.fft_filter(A.pink(n, seed + 1), 60, 900) * np.exp(-t / (0.18 * size)) * 0.6
-    x = A.softclip(body * 1.2 + click * 0.5 + tail, 1.6)
-    st = A.convolve_reverb(x, A.reverb_ir(1.2 * size, 0.35 * size, seed), 0.22)[:n]
+    body = A.softclip(A.sine(f, n) * np.exp(-t / (0.2 * size)) * 1.3, 1.6)
+    click = _dnoise(n, seed, 1500, 12000) * np.exp(-t / 0.006)[:, None]
+    crack = _dnoise(n, seed + 7, 2500, 14000) * np.exp(-t / (0.06 * size))[:, None]
+    tail = _dnoise(n, seed + 1, 90, 1200) * np.exp(-t / (0.16 * size))[:, None]
+    x = A.stereo(body) * 0.75 + click * 0.6 + crack * 0.55 + tail * 0.5
+    ir = A.room_ir(0.9 * size + 0.3, 0.012, 7000.0, seed=seed, width=1.0, hp=250.0)
+    st = x + A.fft_convolve(x.astype(np.float32), ir)[:n] * 0.3
     return _norm(st, 0.95)
 
 
@@ -92,17 +107,19 @@ def impact_big() -> np.ndarray:
     a = impact(43, 1.8)
     n = len(a)
     t = np.arange(n) / SR
-    crack = A.fft_filter(A.noise(n, 44), 2000, 12000) * np.exp(-t / 0.05) * 0.35
-    return _norm(a + A.stereo(crack.astype(np.float32)), 0.97)
+    crack = _dnoise(n, 44, 2000, 12000) * (np.exp(-t / 0.05) * 0.35)[:, None]
+    return _norm(a + crack.astype(np.float32), 0.97)
 
 
 def hit() -> np.ndarray:
+    """Short punch: 808-style kick with a wide snare-like snap and a small room."""
     n = int(0.45 * SR)
-    t = A.tvec(0.45)
-    kick = A.sine(55 + 120 * np.exp(-t / 0.03), n) * np.exp(-t / 0.16)
-    snap = A.fft_filter(A.noise(n, 51), 900, 7000) * np.exp(-t / 0.05) * 0.55
-    x = A.softclip(kick + snap, 1.4)
-    return _norm(A.convolve_reverb(x, A.reverb_ir(0.6, 0.15, 52), 0.18)[:n], 0.9)
+    t = A.tvec(0.45)[:n]
+    kick = A.softclip(A.sine(55 + 120 * np.exp(-t / 0.03), n) * np.exp(-t / 0.12), 1.4)
+    snap = _dnoise(n, 51, 900, 9000) * (np.exp(-t / 0.05) * 0.7)[:, None]
+    x = A.stereo(kick) + snap
+    ir = A.room_ir(0.6, 0.008, 8000.0, seed=52, width=1.0, hp=300.0)
+    return _norm(x + A.fft_convolve(x.astype(np.float32), ir)[:n] * 0.25, 0.9)
 
 
 def thud() -> np.ndarray:
@@ -297,7 +314,7 @@ KIT: dict[str, Callable[[], np.ndarray]] = {
 
 # default mix gains (dB) so every cue sits well without hand-tuning
 GAIN: dict[str, float] = {"whoosh": -6, "whoosh_big": -4, "swish": -8, "riser": -9, "riser_short": -10, "reverse": -10,
-                          "impact": -3, "impact_big": -1, "hit": -5, "thud": -8, "logo_hit": -1, "click": -12,
+                          "impact": -4, "impact_big": -2, "hit": -6, "thud": -8, "logo_hit": -1, "click": -12,
                           "key": -12, "pop": -11, "tick": -16, "blip": -13, "data_blip": -13, "glitch": -9,
                           "ding": -10, "chime": -9, "sub_drop": -4, "downlifter": -10, "ui_click": -13,
                           "ui_tap": -12, "tick_hi": -18, "pop_soft": -11, "blip_up": -13, "blip_down": -13, "snap": -11}
