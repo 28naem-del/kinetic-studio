@@ -172,14 +172,23 @@ class ImageScene(Scene):
         if self.p["scrim"]:
             sh = D.linear_grad(0, ctx.H * 0.45, 0, ctx.H, [ctx.pal("bg", 0), ctx.pal("bg", self.p["scrim"])])
             ctx.c.drawRect(skia.Rect(0, 0, ctx.W, ctx.H), D.paint(0, shader=sh))
-        if self.p["caption"]:
-            r = T[self.p["caption_style"]]
-            f = L.fit_role(ctx, r, self.p["caption"], g.head_w, weight=700)
-            lines = D.wrap(f, self.p["caption"], g.head_w, r.tk(ctx), style="balance")
-            top = g.place(D.block_height(f, len(lines), r.leading), "bottom")
+        cap = self.caption_block(ctx)
+        if cap:
+            f, r, lines, top = cap
             for i, ln in enumerate(D.set_lines(f, lines, g.x0, top, r.leading, r.tk(ctx)).lines):
                 reveal_line(ctx, ln.text, ln.x, ln.baseline, f, ctx.pal("ink"), (ctx.lt - 0.2 - i * 0.1) / 0.7,
                             "left", r.tk(ctx))
+
+
+    def caption_block(self, ctx: Ctx) -> tuple[skia.Font, L.Role, list[str], float] | None:
+        """(font, role, lines, cap top) of the caption block standing on the bottom safe line."""
+        if not self.p["caption"]:
+            return None
+        g = L.grid(ctx)
+        r = T[self.p["caption_style"]]
+        f = L.fit_role(ctx, r, self.p["caption"], g.head_w, weight=700)
+        lines = D.wrap(f, self.p["caption"], g.head_w, r.tk(ctx), style="balance")
+        return f, r, lines, g.place(D.block_height(f, len(lines), r.leading), "bottom")
 
 
 @register("logo")
@@ -319,8 +328,29 @@ class EndCard(Scene):
 
 # ---------------------------------------------------------------------- overlays
 
+def bottom_reserved(ctx: Ctx) -> float:
+    """Height taken on the bottom safe line by in-scene bottom-anchored blocks (image captions)
+    at film time ctx.t, plus a gap, so overlays stack above them instead of overlapping. Eases
+    in/out around the scene's start/end so a stacked overlay glides rather than jumps."""
+    film = getattr(ctx, "film", None)
+    if film is None:
+        return 0.0
+    g = L.grid(ctx)
+    t, ramp, out = ctx.t, 0.45, 0.0
+    for sc in getattr(film, "scenes", []):
+        if not isinstance(sc, ImageScene) or not (sc.start - ramp <= t <= sc.start + sc.dur + ramp):
+            continue
+        cap = sc.caption_block(ctx)
+        if not cap:
+            continue
+        w = E.in_out_cubic(E.clamp((t - sc.start + ramp) / ramp)) * E.in_out_cubic(E.clamp((sc.start + sc.dur + ramp - t) / ramp))
+        out = max(out, w * (g.safe_bottom - cap[3] + g.bl(4)))
+    return out
+
+
 def draw_lower_third(ctx: Ctx, tag: str, text: str, u_in: float, u_out: float) -> None:
-    """Source / citation lower-third sitting on the bottom safe line. u_in, u_out: 0..1 progress
+    """Source / citation lower-third sitting on the bottom safe line, stacked above an image
+    caption that stands there (see bottom_reserved). u_in, u_out: 0..1 progress
     of the in/out moves."""
     c = ctx.c
     g = L.grid(ctx)
@@ -336,7 +366,7 @@ def draw_lower_third(ctx: Ctx, tag: str, text: str, u_in: float, u_out: float) -
     kcap = D.cap_height(tf)
     body = D.block_height(bf, len(lines), cr.leading) if lines else 0.0
     h = pad + kcap + g.bl(3) + body + pad
-    y = g.safe_bottom - h
+    y = g.safe_bottom - h - bottom_reserved(ctx)
     x = g.x0 - (1 - e) * (maxw + g.x0)
     w = min(maxw, max([D.text_w(bf, ln, cr.tk(ctx)) for ln in lines] + [D.text_w(tf, kr.text(tag), kr.tk(ctx))]) + 2 * pad)
     rad = g.bl(2)

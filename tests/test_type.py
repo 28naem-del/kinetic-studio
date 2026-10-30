@@ -230,3 +230,22 @@ def test_paint_shader_full_alpha_unless_given():
     assert abs(_fill(D.paint(0x80000000, shader=white())) - 128) <= 1  # explicit alpha byte
     assert abs(_fill(D.paint(0, shader=white(), alpha=0.25)) - 64) <= 1  # explicit alpha kwarg
     assert _fill(D.paint(0)) == 0                               # no shader: colour 0 stays clear
+
+
+def test_lower_third_stacks_above_image_caption():
+    from kstudio.film import Film
+    from kstudio.scenes.common import bottom_reserved
+    spec = {"mode": "explainer", "_dir": ".",
+            "sources": [{"at": 0.0, "dur": 3.0, "text": "Hennessy & Patterson, Computer Architecture"}],
+            "scenes": [{"type": "title", "title": "Intro", "dur": 2.0},
+                       {"type": "image", "src": "none.jpg", "caption": "Closer memory is faster memory", "dur": 3.0}]}
+    for W, H in ((1080, 1920), (1920, 1080), (1080, 1080)):
+        film = Film(spec, W, H)
+        img = film.scenes[1]
+        surf = skia.Surface(W, H)
+        ctx = film._ctx(surf.getCanvas(), img.start + 1.0)
+        g = L.grid(ctx)
+        top = img.caption_block(ctx)[3]
+        lt_bottom = g.safe_bottom - bottom_reserved(ctx)
+        assert lt_bottom <= top - g.bl(3)                       # stacked: lower third ends above the caption
+        assert bottom_reserved(film._ctx(surf.getCanvas(), 0.5)) == 0.0  # no caption on screen: on the safe line
