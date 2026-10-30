@@ -1,6 +1,10 @@
 // Explainer / education: an editorial primer locked to 84 BPM. 3 + 4 + 5 + 4 + 4 = 20 beats
 // (five bars, 14.29 s). Every cut is on a beat and the end card lands on the bar line (beat 16).
-// Grammar: masked wipe -> match cut ("Cache" becomes the L1 bar) -> half-beat push -> hard cut.
+// Grammar: masked wipe -> match cut ("Cache" becomes the L1 bar) -> half-beat push (page turn) -> hard cut.
+// The cover's lower half is a figure plate (CPU, L1-L3, RAM) standing on the standfirst rule;
+// the cache columns fill with the highlighter on beat 1. The bullets page is pushed in from the
+// right (a page turn, 03 / 04 -> 04 / 04) already composed: heading, standfirst, rules, numerals.
+// The end card steps its elements in 32nds so it is full inside one beat.
 {
   "mode": "explainer",
   "handle": "@kineticstudio",
@@ -14,7 +18,10 @@
   ],
   "scenes": [
     { "type": "cover", "id": "cover", "index": "01", "kicker": "Hardware 101", "page": "01 / 04",
-      "title": "How does a\nCPU cache\nwork?", "accent": "cache", "subtitle": "A 15-second primer", "dur": "3b" },
+      "title": "How does a\nCPU cache\nwork?", "accent": "cache", "subtitle": "A 15-second primer",
+      "bars": [ { "label": "CPU", "solid": true }, { "label": "L1", "accent": true }, { "label": "L2", "accent": true },
+                { "label": "L3", "accent": true }, { "label": "RAM" } ],
+      "dur": "3b" },
     { "type": "definition", "id": "term", "index": "02", "kicker": "Definition", "page": "02 / 04",
       "term": "Cache", "phonetic": "/kash/", "pos": "noun · hardware",
       "definition": "A small, very fast memory next to the CPU that keeps copies of recently used data.",
@@ -38,18 +45,18 @@
       "first": "0b", "stagger": "1/2b", "camera": { "truck": 40 },
       "transition": { "kind": "match", "element": "term" }, "dur": "5b" },
     { "type": "bullets", "id": "why", "index": "04", "kicker": "Why it works", "page": "04 / 04",
-      "heading": "Locality",
+      "heading": "Locality", "caption": "Why most reads never reach RAM.",
       "items": [
         { "text": "Recently used data stays close", "detail": "Temporal locality: loops reuse the same values." },
         { "text": "Neighbours arrive together", "detail": "Spatial locality: each miss fetches a 64-byte line." },
         { "text": "Walk memory in order", "detail": "Sequential access turns most misses into hits." }
       ],
       "first": "1b", "stagger": "1b",
-      "transition": { "kind": "push", "dir": "up", "dur": "1/2b" }, "dur": "4b" },
+      "transition": { "kind": "push", "dir": "left", "dur": "1/2b" }, "dur": "4b" },
     { "type": "end_card", "id": "outro", "icon": "book", "brand": "Kinetic Studio", "title": "Keep data close.",
       "body": "Fast code is cache-friendly code.", "cta": "Follow for more",
       "small": "Latencies approximate, typical desktop CPU. Source: Hennessy & Patterson, Computer Architecture, 6th ed.",
-      "handle": "@kineticstudio",
+      "handle": "@kineticstudio", "step": "1/8b",
       "transition": { "kind": "cut", "on": "downbeat" }, "dur": "4b" }
   ]
 }

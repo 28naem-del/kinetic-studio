@@ -9,7 +9,9 @@ An editorial system on the layout grid (layout.grid / layout.TYPE), with no pixe
   shared anchor (g.anchor_y). The diagram owns the anchor itself: its heading sits in the
   running-head band and the figure fills the anchor -> bottom safe line.
 * Type comes from the scale: headline 168 (cover), display 224 (definition term), title 126
-  (headings, numerals, figures), body 53, caption 40 (diagram labels), kicker 32, meta 30.
+  (headings, numerals, figures), body 53 for running text and every caption-like line (bar
+  subs, connector labels, callouts, bullet details, pronunciation), kicker 32 and meta 30 for
+  the running head only. Nothing a viewer has to read is set below 53 px on the 1080 x 1920 reel.
 * Timing is in beats. Every reveal starts on the grid: bullets every 1b, diagram nodes every
   1/2b with the connecting edge drawn on the off-beat 16th before the node lands, and a tick
   SFX on each entry. Entries use out_expo / out_quint, exits in_quart; no overshoot easing.
@@ -18,11 +20,18 @@ An editorial system on the layout grid (layout.grid / layout.TYPE), with no pixe
   block becomes the L1 bar across a "match" transition.
 * Parallax: diagram edges sit on a far layer, bars on the scene plane, callouts in front;
   any camera move (truck, drift, push) separates them.
+* Carried entrances: a scene that enters on a moving panel transition (push, whip, slice,
+  split, zoom, squash) arrives composed. Its beat-0 structure (running head, heading, rules,
+  tracks) is drawn settled, because the panel move is its entrance; later beats reveal as usual.
+  The incoming panel therefore carries its subject from the first frame of the window.
 
 Scene types and spec fields (all optional unless stated):
 
 cover       index, kicker (running head), title (\\n for line breaks), accent (word of the title
-            set on the accent highlighter), subtitle (standfirst on the bottom safe line), sfx.
+            set on the accent highlighter), subtitle (standfirst on the bottom safe line), sfx,
+            bars [{label, accent, h}]: a figure plate in the lower half, columns standing on the
+            standfirst rule (height grows left to right, or `h` 0..1); `accent` columns fill with
+            the highlighter on beat 1, so the figure lights up with the headline word.
 definition  index, kicker, term, phonetic, pos, definition, note, stats [{label, value}],
             highlight (bool, default true: the term gets the accent highlighter on beat 1).
 diagram     index, kicker, heading, caption (standfirst under the heading), nodes [{id, label,
@@ -32,8 +41,8 @@ diagram     index, kicker, heading, caption (standfirst under the heading), node
             ladder: one bar per node, flush left, width growing down the list (or `w`, a
             fraction of the content width; > 1 bleeds off the right edge); label + sub left,
             value right. The other layouts draw circles of at least 100 px radius.
-bullets     index, kicker, heading, items [str | {text, detail, icon}], first, stagger,
-            numbered (large display numerals; false = check marks).
+bullets     index, kicker, heading, caption (standfirst under the heading), items [str | {text,
+            detail, icon}], first, stagger, numbered (large display numerals; false = check marks).
 keyfact     index, kicker, value, label, detail, color.
 
 Every scene keeps the fields of the v0.1 scene of the same name.
@@ -54,6 +63,9 @@ T = L.TYPE
 ENTER = E.out_expo      # house entry
 SETTLE = E.out_quint    # longer settles (bars, rules)
 EXIT = E.in_quart       # house exit
+SMALL = T["body"]       # caption-like lines: the 53 px step, never the 40 px caption on a reel
+# transitions that move the incoming scene in as a panel: its beat-0 structure arrives with it
+CARRY_KINDS = ("push", "whip", "slice", "split", "zoom", "squash")
 
 
 # ---------------------------------------------------------------------- helpers
@@ -66,6 +78,20 @@ def _bu(ctx: Ctx, at: float, dur: float = 0.5) -> float:
 def _su(ctx: Ctx, at_s: float, dur_b: float = 0.5) -> float:
     """Like _bu, with the start in scene seconds (resolved spec times) and the length in beats."""
     return E.clamp((ctx.lt - at_s) / max(dur_b * ctx.beat_len, 1e-6))
+
+
+def carried(ctx: Ctx, scene: Scene) -> bool:
+    """True when `scene` enters on a moving panel transition (see CARRY_KINDS)."""
+    film = getattr(ctx, "film", None)
+    for b in getattr(film, "boundaries", None) or ():
+        if b.b is scene and b.kind in CARRY_KINDS and b.dur > 0:
+            return True
+    return False
+
+
+def _bu0(ctx: Ctx, settled: bool, at: float, dur: float = 0.5) -> float:
+    """_bu for beat-0 structure: 1 (already set) when the scene is carried in by its transition."""
+    return 1.0 if settled else _bu(ctx, at, dur)
 
 
 def _luma(rgb: tuple[int, int, int]) -> float:
@@ -85,9 +111,10 @@ def _tick(at: float, pitch: float = 0.0, gain: float = -4.0, sound: str = "tick"
 
 
 def _rise(ctx: Ctx, text: str, x: float, baseline: float, f: skia.Font, color: int, u: float,
-          tracking: float = 0.0, ease=None) -> None:
+          tracking: float = 0.0, ease=None, floor: float | None = None) -> None:
     """Masked rise of one line, left-aligned at x (u = 0..1 window progress; out_quint by default,
-    a long settle; pass ENTER for the snappier out_expo)."""
+    a long settle; pass ENTER for the snappier out_expo). `floor` caps the mask (a line set on the
+    bottom safe line rises out of that line instead of through the space below it)."""
     if u <= 0 or not text:
         return
     e = (ease or SETTLE)(u)
@@ -95,21 +122,22 @@ def _rise(ctx: Ctx, text: str, x: float, baseline: float, f: skia.Font, color: i
     pad = cap * 0.45
     c = ctx.c
     c.save()
-    c.clipRect(skia.Rect(-ctx.W, baseline - cap - pad, 2 * ctx.W, baseline + pad * 1.2))
+    bottom = baseline + pad * 1.2 if floor is None else min(baseline + pad * 1.2, floor)
+    c.clipRect(skia.Rect(-ctx.W, baseline - cap - pad, 2 * ctx.W, bottom))
     D.draw_text(c, text, x, baseline + (1 - e) * (cap + pad * 2), f, color, align="left", tracking=tracking)
     c.restore()
 
 
-def folio(ctx: Ctx, g: L.Grid, index: str, label: str, count: str = "") -> float:
+def folio(ctx: Ctx, g: L.Grid, index: str, label: str, count: str = "", settled: bool = False) -> float:
     """Running head on the safe top line; returns its baseline. The hairline draws in over the
-    first half beat; the label rises with it."""
+    first half beat; the label rises with it (already set when the scene is carried in)."""
     c = ctx.c
     kr, mr = T["kicker"], T["meta"]
     kf, mf = kr.font(ctx), mr.font(ctx, weight=600)
     top = g.safe_top + g.bl(2)
     base = top + D.cap_height(kf)
     ink = ctx.pal.on("bg")
-    u = _bu(ctx, 0.0, 0.75)
+    u = _bu0(ctx, settled, 0.0, 0.75)
     x = g.x0
     if index:
         _rise(ctx, index, x, base, mf, ctx.pal("accent"), u, mr.tk(ctx))
@@ -170,13 +198,15 @@ def _pad_rect(f: skia.Font, x: float, baseline: float, w: float, g: L.Grid) -> s
 class Cover(Scene):
     """Explainer cover: running head, a 168 px headline on the anchor (visible from frame 0:
     lines rise together over half a beat) and the standfirst rule on beat 0, one word of the
-    headline on the accent highlighter on beat 1, the standfirst on the bottom safe line on beat 2."""
+    headline on the accent highlighter on beat 1, the standfirst on the bottom safe line on beat 2.
+    With `bars`, the lower half carries a figure plate: columns grow up from the standfirst rule
+    on beat 0 (a 16th apart) and the `accent` ones fill with the highlighter on beat 1."""
     defaults = {"index": "01", "kicker": "", "title": "Title", "accent": "", "subtitle": "", "sfx": "tick",
-                "page": ""}
+                "page": "", "bars": []}
 
     def cues(self) -> list[Cue]:
         out = []
-        if self.p["accent"]:
+        if self.p["accent"] or any(isinstance(b, dict) and b.get("accent") for b in self.p["bars"] or []):
             out.append(_tick(self.bt(1), 3.0, sound=self.p["sfx"]))
         if self.p["subtitle"]:
             out.append(_tick(self.bt(2), 0.0, sound=self.p["sfx"]))
@@ -185,7 +215,8 @@ class Cover(Scene):
     def draw(self, ctx: Ctx) -> None:
         c = ctx.c
         g = L.grid(ctx)
-        folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p))
+        settled = carried(ctx, self)
+        folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p), settled)
         r = T["headline"]
         f = L.fit_role(ctx, r, self.p["title"].replace("\n", " "), g.content_w, face="display")
         tk = r.tk(ctx, "display")
@@ -195,7 +226,7 @@ class Cover(Scene):
         acc = self.p["accent"].strip().lower()
         hl = skia.Rect.MakeEmpty()
         for i, ln in enumerate(blk.lines):
-            u = _bu(ctx, i / 32, 0.5)
+            u = _bu0(ctx, settled, i / 32, 0.5)
             pos = ln.text.lower().find(acc) if acc else -1
             if pos >= 0 and ln.text[pos:pos + len(acc)]:
                 x0 = ln.x + D.text_w(f, ln.text[:pos], tk) if pos else ln.x
@@ -206,18 +237,73 @@ class Cover(Scene):
                 _two_tone(ctx, ln.text, ln.x, ln.baseline, f, ink, ctx.pal(_on(ctx, "accent")), hl, tk)
             else:
                 _rise(ctx, ln.text, ln.x, ln.baseline, f, ink, u, tk, ENTER)
+        floor = g.safe_bottom
         if self.p["subtitle"]:
-            sr = T["body"]
+            sr = SMALL
             sf = sr.font(ctx, weight=500)
             sl = D.wrap(sf, self.p["subtitle"], g.measure, sr.tk(ctx))
             sh = D.block_height(sf, len(sl), sr.leading)
-            top = max(blk.baseline + g.bl(8), g.safe_bottom - sh)
-            u = _bu(ctx, 1 / 8, 0.75)
-            c.drawRect(skia.Rect(g.x0, top - g.bl(5), g.x0 + g.content_w * SETTLE(u), top - g.bl(5) + g.bl(0.25)),
+            desc = sf.getMetrics().fDescent                      # descenders stay above the safe line
+            top = max(blk.baseline + g.bl(8), g.safe_bottom - sh - desc)
+            floor = top - g.bl(5)
+            u = _bu0(ctx, settled, 1 / 8, 0.75)
+            c.drawRect(skia.Rect(g.x0, floor, g.x0 + g.content_w * SETTLE(u), floor + g.bl(0.25)),
                        D.paint(ctx.pal(ctx.pal.on(self.ground), 0.4)))
             sb = D.set_lines(sf, sl, g.x0, top, sr.leading, sr.tk(ctx))
             for i, ln in enumerate(sb.lines):
-                _rise(ctx, ln.text, ln.x, ln.baseline, sf, ctx.pal("muted"), _bu(ctx, 2.0 + i / 16, 0.75), sr.tk(ctx))
+                _rise(ctx, ln.text, ln.x, ln.baseline, sf, ctx.pal("muted"), _bu(ctx, 2.0 + i / 16, 0.75), sr.tk(ctx),
+                      floor=g.safe_bottom)
+        bars = [b if isinstance(b, dict) else {"label": str(b)} for b in self.p["bars"] or []]
+        if bars:
+            self._plate(ctx, g, bars, blk.baseline + g.bl(12), floor, settled)
+
+    def plate_rects(self, g: L.Grid, n_or_bars: list[dict], top: float, floor: float) -> list[skia.Rect]:
+        """Final column rects of the figure plate: equal columns across the content width,
+        standing on `floor`, heights growing left to right (or each bar's `h`, 0..1)."""
+        n = len(n_or_bars)
+        gap = g.gutter
+        w = (g.content_w - gap * (n - 1)) / max(n, 1)
+        lo = 0.36
+        out = []
+        for i, bar in enumerate(n_or_bars):
+            h = bar.get("h")
+            frac = float(h) if h is not None else (lo + (1 - lo) * i / max(n - 1, 1) if n > 1 else 1.0)
+            hh = (floor - top) * E.clamp(frac)
+            x = g.x0 + i * (w + gap)
+            out.append(skia.Rect(x, floor - hh, x + w, floor))
+        return out
+
+    def _plate(self, ctx: Ctx, g: L.Grid, bars: list[dict], top: float, floor: float, settled: bool) -> None:
+        c = ctx.c
+        ink_k = ctx.pal.on(self.ground)
+        lf = SMALL.font(ctx, weight=650)
+        ltk = SMALL.tk(ctx)
+        cap = D.cap_height(lf)
+        pad = g.bl(3)
+        acc_txt = ctx.pal(_on(ctx, "accent"))
+        k_acc = 0
+        for i, (bar, full) in enumerate(zip(bars, self.plate_rects(g, bars, top, floor))):
+            ug = SETTLE(_bu0(ctx, settled, i / 16, 0.75))
+            if ug <= 0:
+                continue
+            r = skia.Rect(full.left(), floor - full.height() * ug, full.right(), floor)
+            solid = bool(bar.get("solid"))
+            base_fill = ctx.pal(ink_k) if solid else ctx.pal(ink_k, 0.08)
+            c.drawRect(r, D.paint(base_fill))
+            txt = ctx.pal(_on(ctx, ink_k)) if solid else ctx.pal(ink_k)
+            fill_r = skia.Rect.MakeEmpty()
+            if bar.get("accent"):
+                ua = ENTER(_bu(ctx, 1.0 + k_acc / 16, 0.75))
+                k_acc += 1
+                if ua > 0:
+                    fill_r = skia.Rect(r.left(), floor - r.height() * ua, r.right(), floor)
+                    c.drawRect(fill_r, D.paint(ctx.pal("accent")))
+            label = str(bar.get("label", ""))
+            if label:
+                c.save()
+                c.clipRect(r)
+                _two_tone(ctx, label, r.left() + pad, r.top() + pad + cap, lf, txt, acc_txt, fill_r, ltk)
+                c.restore()
 
 
 # ---------------------------------------------------------------------- definition
@@ -241,8 +327,9 @@ class Definition(Scene):
     def draw(self, ctx: Ctx) -> None:
         c = ctx.c
         g = L.grid(ctx)
+        settled = carried(ctx, self)
         if self.p["index"] or self.p["kicker"]:
-            folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p))
+            folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p), settled)
         ink_k = ctx.pal.on(self.ground)
         ink = ctx.pal(ink_k)
         rule = D.paint(ctx.pal(ink_k, 0.35))
@@ -256,18 +343,19 @@ class Definition(Scene):
         box = _pad_rect(tf, x, base, tw, g)
         hl = highlight(ctx, box, _bu(ctx, 1.0, 0.75)) if self.p["highlight"] else skia.Rect.MakeEmpty()
         ctx.publish("term", box, text=term, em=box.height() / tf.getSize())
-        u = _bu(ctx, 0.0, 0.75)
+        u = _bu0(ctx, settled, 0.0, 0.75)
         if u >= 1:
             _two_tone(ctx, term, x, base, tf, ink, ctx.pal(_on(ctx, "accent")), hl, tk)
         else:
             _rise(ctx, term, x, base, tf, ink, u, tk)
         y = base + 0.18 * tf.getSize() + g.bl(8)
-        mf = T["meta"].font(ctx, weight=500, size=T["caption"].px(g))
+        mf = T["meta"].font(ctx, weight=500, size=SMALL.px(g))
         meta = "  ·  ".join(v for v in (self.p["phonetic"], self.p["pos"]) if v)
         if meta:
             _rise(ctx, meta, g.x0, y, mf, ctx.pal("accent"), _bu(ctx, 1.0, 0.75), 0.02)
-            y += g.bl(5)
-        c.drawRect(skia.Rect(g.x0, y, g.x0 + g.content_w * SETTLE(_bu(ctx, 0.0, 0.75)), y + g.bl(0.25)), rule)
+            y += g.bl(6)
+        c.drawRect(skia.Rect(g.x0, y, g.x0 + g.content_w * SETTLE(_bu0(ctx, settled, 0.0, 0.75)), y + g.bl(0.25)),
+                   rule)
         y += g.bl(7)
         br = T["body"]
         bf = br.font(ctx)
@@ -278,7 +366,7 @@ class Definition(Scene):
                 _rise(ctx, ln.text, ln.x, ln.baseline, bf, ink, _bu(ctx, 1.0 + (i + 1) / 16, 0.75), br.tk(ctx))
             y = bb.baseline + g.bl(6)
         if self.p["note"]:
-            nr = T["caption"]
+            nr = SMALL
             nf = nr.font(ctx)
             nl = D.wrap(nf, self.p["note"], g.measure, nr.tk(ctx))
             nb = D.set_lines(nf, nl, g.x0, y, nr.leading, nr.tk(ctx))
@@ -296,7 +384,8 @@ class Definition(Scene):
         vbase = g.safe_bottom
         ktop = vbase - D.cap_height(vf) - g.bl(4) - D.cap_height(kf)
         hy = ktop - g.bl(4)
-        c.drawRect(skia.Rect(g.x0, hy, g.x0 + g.content_w * SETTLE(_bu(ctx, 1 / 8, 0.75)), hy + g.bl(0.25)), rule)
+        c.drawRect(skia.Rect(g.x0, hy, g.x0 + g.content_w * SETTLE(_bu0(ctx, settled, 1 / 8, 0.75)),
+                             hy + g.bl(0.25)), rule)
         first = _num(str(stats[0].get("value", "")))
         for j, st in enumerate(stats):
             sx = g.span(j * cols, cols)[0]
@@ -310,7 +399,7 @@ class Definition(Scene):
                 v = first[1] + (num[1] - first[1]) * k
                 val = f"{num[0]}{v:.{num[3]}f}{num[2]}"
             col = ctx.pal("accent") if j == 0 else ink
-            _rise(ctx, val, sx, vbase, vf, col, uj, vr.tk(ctx, "display"))
+            _rise(ctx, val, sx, vbase, vf, col, uj, vr.tk(ctx, "display"), floor=g.safe_bottom + g.bl(0.5))
 
 
 def _num(s: str) -> tuple[str, float, str, int] | None:
@@ -421,7 +510,8 @@ class Diagram(Scene):
     # -- drawing -----------------------------------------------------------
     def draw(self, ctx: Ctx) -> None:
         g = L.grid(ctx)
-        fb = folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p))
+        settled = carried(ctx, self)
+        fb = folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p), settled)
         ink_k = ctx.pal.on(self.ground)
         if self.p["heading"]:
             hr = T["title"]
@@ -429,15 +519,17 @@ class Diagram(Scene):
             hl = D.wrap(hf, self.p["heading"], g.content_w, hr.tk(ctx, "display"), style="balance")[:1]
             hb = D.set_lines(hf, hl, g.x0, fb + g.bl(5), hr.leading, hr.tk(ctx, "display"))
             for ln in hb.lines:
-                _rise(ctx, ln.text, ln.x, ln.baseline, hf, ctx.pal(ink_k), _bu(ctx, 0.0, 0.75), hr.tk(ctx, "display"))
+                _rise(ctx, ln.text, ln.x, ln.baseline, hf, ctx.pal(ink_k), _bu0(ctx, settled, 0.0, 0.75),
+                      hr.tk(ctx, "display"))
             if self.p["caption"]:
-                cr = T["body"]
+                cr = SMALL
                 cf = cr.font(ctx, weight=400)
                 cl = D.wrap(cf, self.p["caption"], g.content_w, cr.tk(ctx))[:1]
                 for ln in D.set_lines(cf, cl, g.x0, hb.baseline + g.bl(4), cr.leading, cr.tk(ctx)).lines:
-                    _rise(ctx, ln.text, ln.x, ln.baseline, cf, ctx.pal("muted"), _bu(ctx, 1 / 4, 0.75), cr.tk(ctx))
+                    _rise(ctx, ln.text, ln.x, ln.baseline, cf, ctx.pal("muted"), _bu0(ctx, settled, 1 / 4, 0.75),
+                          cr.tk(ctx))
         if self.p["layout"] == "ladder":
-            self._draw_ladder(ctx, g)
+            self._draw_ladder(ctx, g, settled)
         else:
             self._draw_circles(ctx, g)
 
@@ -451,13 +543,13 @@ class Diagram(Scene):
         ctx.c.drawCircle(x, y, g.bl(1.5), D.paint(ctx.pal("accent2", 0.35), blur=g.bl(1.5)))
         ctx.c.drawCircle(x, y, g.bl(0.75), D.paint(ctx.pal("accent2")))
 
-    def _draw_ladder(self, ctx: Ctx, g: L.Grid) -> None:
+    def _draw_ladder(self, ctx: Ctx, g: L.Grid, settled: bool = False) -> None:
         c = ctx.c
         nodes = self.p["nodes"]
         rects = self._ladder(ctx, g)
         ap = self._appear()
         ids = {nd.get("id", str(i)): i for i, nd in enumerate(nodes)}
-        lr, sr, vr = T["title"].with_(size=95.0), T["caption"], T["subhead"].with_(face="display")
+        lr, sr, vr = T["title"].with_(size=95.0), SMALL, T["subhead"].with_(face="display")
         pad = g.bl(4)
         edge_c = ctx.pal("accent2")
         # far layer: edges (vertical connectors in the gaps, at the bars' left column)
@@ -489,7 +581,7 @@ class Diagram(Scene):
         # scene plane: the empty tracks (beat 0, a 16th apart), then the bars
         n = len(nodes)
         for i, rt in enumerate(rects):
-            ut = SETTLE(_bu(ctx, i / 16, 0.75))
+            ut = SETTLE(_bu0(ctx, settled, i / 16, 0.75))
             if ut > 0:
                 c.drawRect(skia.Rect(rt.left(), rt.top(), rt.left() + rt.width() * ut, rt.bottom()),
                            D.paint(ctx.pal(ctx.pal.on(self.ground), 0.06)))
@@ -541,7 +633,7 @@ class Diagram(Scene):
         # near layer: callouts
         times = self._callout_times()
         with ctx.layer(0.85):
-            cr = T["caption"]
+            cr = SMALL
             cf = cr.font(ctx, weight=650)
             for j, co in enumerate(self.p["callouts"]):
                 i = ids.get(co.get("node", ""), 0)
@@ -550,9 +642,9 @@ class Diagram(Scene):
                 u = _su(ctx, times[j], 0.75)
                 if u <= 0:
                     continue
-                txt = str(co.get("text", ""))
+                ctext = str(co.get("text", ""))
                 rt = rects[i]
-                tw = D.text_w(cf, txt, cr.tk(ctx))
+                tw = D.text_w(cf, ctext, cr.tk(ctx))
                 pw, ph = tw + 2 * g.bl(3), D.cap_height(cf) + 2 * g.bl(2.5)
                 if rt.right() + g.gutter + pw <= g.x1:
                     bx, by = rt.right() + g.gutter, rt.centerY() - ph / 2
@@ -563,7 +655,7 @@ class Diagram(Scene):
                 c.save()
                 c.clipRect(skia.Rect.MakeXYWH(bx, by, w, ph))
                 D.rrect(c, bx, by, pw, ph, ph / 2, D.paint(ctx.pal("accent2")))
-                D.draw_text(c, txt, bx + g.bl(3), by + ph / 2 + D.cap_height(cf) / 2, cf, ctx.pal(_on(ctx, "accent2")),
+                D.draw_text(c, ctext, bx + g.bl(3), by + ph / 2 + D.cap_height(cf) / 2, cf, ctx.pal(_on(ctx, "accent2")),
                             align="left", tracking=cr.tk(ctx))
                 c.restore()
 
@@ -603,7 +695,7 @@ class Diagram(Scene):
                 elif edge.get("style") == "arrow":
                     D.arrow_head(c, ex, ey, ang, g.bl(2.5), ctx.pal("accent2"))
                 if edge.get("label"):
-                    lf = T["meta"].font(ctx, weight=600, size=T["caption"].px(g))
+                    lf = T["meta"].font(ctx, weight=600, size=SMALL.px(g))
                     _rise(ctx, str(edge["label"]), (sx + ex) / 2 + g.bl(2), (sy + ey) / 2 - g.bl(2), lf,
                           ctx.pal("accent2"), u, T["meta"].tk(ctx))
         for i, nd in enumerate(nodes):
@@ -621,15 +713,15 @@ class Diagram(Scene):
             fill = self._fill(i, nd)
             c.drawCircle(x, y, rr * e, D.paint(ctx.pal(fill)))
             label = str(nd.get("label", ""))
-            lf = D.fit_font(ctx.theme["display"], label, rr * 1.5, max(rr * 0.62, T["caption"].px(g)), 650)
+            lf = D.fit_font(ctx.theme["display"], label, rr * 1.5, max(rr * 0.62, SMALL.px(g)), 650)
             D.draw_text(c, label, x, y, lf, ctx.pal(_on(ctx, fill), E.clamp(u * 2)), valign="middle")
             if nd.get("sub"):
-                sf = T["meta"].font(ctx, weight=500, size=T["caption"].px(g))
+                sf = T["meta"].font(ctx, weight=500, size=SMALL.px(g))
                 _rise(ctx, str(nd["sub"]), x - D.text_w(sf, str(nd["sub"])) / 2, y + rr + g.bl(7), sf,
                       ctx.pal(ink_k, 0.7), _su(ctx, ap[i] + ctx.beat_len / 4, 0.75))
         times = self._callout_times()
         with ctx.layer(0.85):
-            cf = T["caption"].font(ctx, weight=650)
+            cf = SMALL.font(ctx, weight=650)
             for j, co in enumerate(self.p["callouts"]):
                 ni = ids.get(co.get("node", ""), 0)
                 u = _su(ctx, times[j], 0.75)
@@ -657,9 +749,11 @@ class Bullets(Scene):
     anchor and the list's rules and ghosted numerals on beat 0, then one item per `stagger`
     (default 1b) from `first` (default 1b) with a tick: its numeral and accent rule come in,
     its text rises, and the previous item steps back to muted. Rows share the anchor -> bottom
-    safe line. Items are strings or {text, detail, icon}; numbered false sets check marks."""
-    defaults = {"index": "", "kicker": "", "heading": "", "items": [], "stagger": "1b", "first": "1b",
-                "numbered": True, "page": ""}
+    safe line. Items are strings or {text, detail, icon}; numbered false sets check marks.
+    Item text and details are both on the 53 px step (weight and colour carry the hierarchy).
+    Carried in by a push, the heading, rules and ghost numerals arrive already set."""
+    defaults = {"index": "", "kicker": "", "heading": "", "caption": "", "items": [], "stagger": "1b",
+                "first": "1b", "numbered": True, "page": ""}
 
     def _t(self, i: int) -> float:
         return self.p["first"] + i * self.p["stagger"]
@@ -670,8 +764,9 @@ class Bullets(Scene):
     def draw(self, ctx: Ctx) -> None:
         c = ctx.c
         g = L.grid(ctx)
+        settled = carried(ctx, self)
         if self.p["index"] or self.p["kicker"]:
-            folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p))
+            folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p), settled)
         ink_k = ctx.pal.on(self.ground)
         top = g.anchor_y
         if self.p["heading"]:
@@ -680,14 +775,23 @@ class Bullets(Scene):
             hl = D.wrap(hf, self.p["heading"], g.content_w, hr.tk(ctx, "display"), style="balance")
             hb = D.set_lines(hf, hl, g.x0, top, hr.leading, hr.tk(ctx, "display"))
             for i, ln in enumerate(hb.lines):
-                _rise(ctx, ln.text, ln.x, ln.baseline, hf, ctx.pal(ink_k), _bu(ctx, i / 16, 0.75), hr.tk(ctx, "display"))
+                _rise(ctx, ln.text, ln.x, ln.baseline, hf, ctx.pal(ink_k), _bu0(ctx, settled, i / 16, 0.75),
+                      hr.tk(ctx, "display"))
             top = hb.baseline + g.bl(8)
+            if self.p["caption"]:
+                cf = SMALL.font(ctx, weight=400)
+                cl = D.wrap(cf, self.p["caption"], g.content_w, SMALL.tk(ctx))[:1]
+                cb = D.set_lines(cf, cl, g.x0, hb.baseline + g.bl(4), SMALL.leading, SMALL.tk(ctx))
+                for ln in cb.lines:
+                    _rise(ctx, ln.text, ln.x, ln.baseline, cf, ctx.pal("muted"), _bu0(ctx, settled, 1 / 8, 0.75),
+                          SMALL.tk(ctx))
+                top = cb.baseline + g.bl(8)
         items = self.p["items"]
         n = len(items)
         if not n:
             return
         row_h = (g.safe_bottom - top) / n
-        nr, br, dr = T["headline"], T["body"], T["caption"]
+        nr, br, dr = T["headline"], T["body"], SMALL
         nf = nr.font(ctx, weight=500, face="display")
         bf, df = br.font(ctx, weight=600), dr.font(ctx, weight=400)
         ntk = nr.tk(ctx, "display")
@@ -700,7 +804,7 @@ class Bullets(Scene):
             icon = None if isinstance(item, str) else item.get("icon")
             ry = top + i * row_h
             # beat 0: the list's structure (rule + ghost numeral), staggered by a 16th
-            u0 = _bu(ctx, (i + 1) / 16, 0.75)
+            u0 = _bu0(ctx, settled, (i + 1) / 16, 0.75)
             c.drawRect(skia.Rect(g.x0, ry, g.x0 + g.content_w * SETTLE(u0), ry + hair), D.paint(ctx.pal(ink_k, 0.25)))
             ctop = ry + g.bl(4)
             nbase = ctop + D.cap_height(nf)
@@ -763,8 +867,9 @@ class KeyFact(Scene):
     def draw(self, ctx: Ctx) -> None:
         c = ctx.c
         g = L.grid(ctx)
+        settled = carried(ctx, self)
         if self.p["index"] or self.p["kicker"]:
-            folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p))
+            folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p), settled)
         ink_k = ctx.pal.on(self.ground)
         val = str(self.p["value"])
         vr = T["display"]
@@ -781,7 +886,7 @@ class KeyFact(Scene):
             D.draw_text(c, val, 0, 0, vf, ctx.pal(self.p["color"]), align="left")
             c.restore()
         else:
-            _rise(ctx, val, g.x0, base, vf, ctx.pal(self.p["color"]), _bu(ctx, 0.0, 0.75))
+            _rise(ctx, val, g.x0, base, vf, ctx.pal(self.p["color"]), _bu0(ctx, settled, 0.0, 0.75))
         y = base + g.bl(10)
         if self.p["label"]:
             lr = T["title"]
