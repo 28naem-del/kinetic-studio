@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import os
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
@@ -83,26 +84,76 @@ def radial_grad(cx: float, cy: float, r: float, colors: list[int], pos: list[flo
 
 
 # --------------------------------------------------------------------- text
+#
+# Every measure and draw goes through one model: glyph advances + GPOS pair kerning (shaped and
+# cached per typeface instance in fonts.py) + tracking in em between glyphs. Measuring, wrapping,
+# per-glyph layout and drawing therefore always agree, with or without tracking.
 
 def cap_height(font: skia.Font) -> float:
     m = font.getMetrics()
     return m.fCapHeight if m.fCapHeight > 0 else font.getSize() * 0.7
 
 
-def text_w(font: skia.Font, s: str, tracking: float = 0.0) -> float:
+def _fkey(font: skia.Font) -> tuple:
+    return (font.getTypeface().uniqueID(), font.getSize(), font.getScaleX(), font.getSkewX())
+
+
+_RUNS: dict[tuple, tuple] = {}
+
+
+def _run(font: skia.Font, s: str, tracking: float = 0.0, kern: bool = True) -> tuple:
+    """(glyph ids, x offsets, advances, width) for one line; width excludes trailing tracking."""
+    key = (_fkey(font), s, float(tracking), bool(kern))
+    r = _RUNS.get(key)
+    if r is None:
+        glyphs = list(font.textToGlyphs(s)) if s else []
+        if len(glyphs) != len(s):  # surrogate/odd input: fall back to Skia's own glyph mapping
+            kern = False
+        adv = list(font.getWidths(glyphs)) if glyphs else []
+        size = font.getSize()
+        kv = F.kerning(font.getTypeface(), s) if kern and len(glyphs) == len(s) else [0.0] * max(0, len(glyphs) - 1)
+        tr = tracking * size
+        xs, x = [], 0.0
+        for i, a in enumerate(adv):
+            xs.append(x)
+            x += a + tr + (kv[i] * size if i < len(kv) else 0.0)
+        width = (xs[-1] + adv[-1]) if adv else 0.0
+        r = (glyphs, xs, adv, width)
+        if len(_RUNS) > 20000:
+            _RUNS.clear()
+        _RUNS[key] = r
+    return r
+
+
+def text_w(font: skia.Font, s: str, tracking: float = 0.0, kern: bool = True) -> float:
+    """Advance width of one line (kerned; tracking in em is added between glyphs)."""
     if not s:
         return 0.0
-    return font.measureText(s) + tracking * font.getSize() * (len(s) - 1)
+    return _run(font, s, tracking, kern)[3]
 
 
-def glyph_layout(font: skia.Font, s: str, tracking: float = 0.0) -> list[tuple[str, float, float]]:
-    """Per-character (char, x offset, advance) for staggered per-letter animation."""
-    out, x = [], 0.0
-    tr = tracking * font.getSize()
-    for ch in s:
-        w = font.measureText(ch)
-        out.append((ch, x, w))
-        x += w + tr
+def glyph_layout(font: skia.Font, s: str, tracking: float = 0.0, kern: bool = True) -> list[tuple[str, float, float]]:
+    """Per-character (char, x offset, advance) from the kerned run, for per-letter animation."""
+    _g, xs, adv, _w = _run(font, s, tracking, kern)
+    if len(xs) != len(s):
+        out, x = [], 0.0
+        for ch in s:
+            w = font.measureText(ch)
+            out.append((ch, x, w))
+            x += w + tracking * font.getSize()
+        return out
+    return [(ch, xs[i], adv[i]) for i, ch in enumerate(s)]
+
+
+def glyph_rects(font: skia.Font, s: str, x: float, y: float, tracking: float = 0.0,
+                kern: bool = True) -> list[tuple[str, skia.Rect]]:
+    """Per-character ink bounds at baseline (x, y), from the same kerned run as draw_text."""
+    glyphs, xs, _adv, _w = _run(font, s, tracking, kern)
+    bounds = font.getBounds(glyphs) if glyphs else []
+    out = []
+    for i, ch in enumerate(s[:len(glyphs)]):
+        b = bounds[i]
+        out.append((ch, skia.Rect(x + xs[i] + b.left(), y + b.top(), x + xs[i] + b.right(), y + b.bottom())))
     return out
 
 
@@ -117,54 +168,237 @@ def fit_font(family: str, text: str, max_w: float, max_size: float, weight: int 
     return f
 
 
-def wrap(font: skia.Font, text: str, max_w: float, tracking: float = 0.0) -> list[str]:
-    lines: list[str] = []
-    for para in text.split("\n"):
-        cur = ""
-        for word in para.split():
-            trial = f"{cur} {word}".strip()
-            if cur and text_w(font, trial, tracking) > max_w:
-                lines.append(cur)
-                cur = word
-            else:
-                cur = trial
-        lines.append(cur)
-    return lines
+_WRAPS: dict[tuple, list[str]] = {}
+
+
+def _wrap_para(font: skia.Font, words: list[str], max_w: float, tracking: float, style: str,
+               max_rag: float) -> list[str]:
+    m = len(words)
+    if m <= 1:
+        return [" ".join(words)]
+    widths: dict[tuple[int, int], float] = {}
+
+    def W(i: int, j: int) -> float:
+        k = (i, j)
+        if k not in widths:
+            widths[k] = text_w(font, " ".join(words[i:j]), tracking)
+        return widths[k]
+
+    greedy, start = [], 0
+    for j in range(1, m):
+        if W(start, j + 1) > max_w:
+            greedy.append((start, j))
+            start = j
+    greedy.append((start, m))
+    n = len(greedy)
+    if n == 1 or style == "greedy":
+        return [" ".join(words[i:j]) for i, j in greedy]
+
+    def cost(i: int, j: int, last: bool) -> float:
+        w = W(i, j)
+        if w > max_w * 1.0001 and j - i > 1:
+            return math.inf
+        slack = max(0.0, max_w - w) / max_w
+        c = slack * slack * (0.15 if (last and style != "balance") else 1.0)
+        if not last and slack > max_rag:
+            c += 4.0 * (slack - max_rag)              # max rag: no short line mid-paragraph
+        if last and j - i == 1 and m > n:
+            c += 2.0                                   # widow: lone word on the last line
+        if not last and j - i > 1 and len(words[j - 1].strip(".,;:!?\"'")) <= 2:
+            c += 0.02                                  # avoid a dangling short word at a line end
+        if i == 0 and j == 1 and m > n:
+            c += 1.0                                   # orphan: lone word on the first line
+        return c
+
+    INF = math.inf
+    dp = [[INF] * (m + 1) for _ in range(n + 1)]
+    bk = [[0] * (m + 1) for _ in range(n + 1)]
+    dp[0][0] = 0.0
+    for k in range(1, n + 1):
+        last = k == n
+        for j in range(k, m + 1):
+            if last and j != m:
+                continue
+            best, arg = INF, -1
+            for i in range(k - 1, j):
+                if dp[k - 1][i] == INF:
+                    continue
+                v = dp[k - 1][i] + cost(i, j, last)
+                if v < best:
+                    best, arg = v, i
+            dp[k][j], bk[k][j] = best, arg
+    if dp[n][m] == INF:
+        return [" ".join(words[i:j]) for i, j in greedy]
+    cuts, j = [], m
+    for k in range(n, 0, -1):
+        i = bk[k][j]
+        cuts.append((i, j))
+        j = i
+    return [" ".join(words[i:j]) for i, j in reversed(cuts)]
+
+
+def wrap(font: skia.Font, text: str, max_w: float, tracking: float = 0.0, style: str = "pretty",
+         max_rag: float = 0.4) -> list[str]:
+    """Break text into lines no wider than max_w (explicit '\\n' always breaks).
+
+    Uses the same number of lines as a greedy fill, then chooses the breaks:
+    - "pretty" (default): ragged-right with minimum raggedness, no line shorter than
+      (1 - max_rag) of the measure except the last, no widow or orphan word where avoidable;
+    - "balance": equal-length lines (headlines, captions);
+    - "greedy": first-fit, as in v0.1."""
+    key = (_fkey(font), text, round(float(max_w), 2), float(tracking), style, float(max_rag))
+    out = _WRAPS.get(key)
+    if out is None:
+        out = []
+        for para in text.split("\n"):
+            out.extend(_wrap_para(font, para.split(), max_w, tracking, style, max_rag))
+        if len(_WRAPS) > 4000:
+            _WRAPS.clear()
+        _WRAPS[key] = out
+    return list(out)
+
+
+def _blob(font: skia.Font, s: str, tracking: float, kern: bool) -> skia.TextBlob | None:
+    glyphs, xs, _adv, _w = _run(font, s, tracking, kern)
+    if not glyphs:
+        return None
+    b = skia.TextBlobBuilder()
+    b.allocRunPosH(font, glyphs, xs, 0.0)
+    return b.make()
 
 
 def draw_text(c: skia.Canvas, s: str, x: float, y: float, font: skia.Font, color: int,
               align: str = "center", tracking: float = 0.0, stroke: float = 0.0,
-              valign: str = "baseline", blur: float = 0.0) -> float:
-    """Draw a single line. y is the baseline (or the cap-centre with valign='middle').
-    Returns the drawn width."""
-    w = text_w(font, s, tracking)
+              valign: str = "baseline", blur: float = 0.0, kern: bool = True) -> float:
+    """Draw a single kerned line. y is the baseline (or the cap-centre with valign='middle', the
+    cap top with valign='top'). Returns the drawn width."""
+    w = text_w(font, s, tracking, kern)
     if align == "center":
         x -= w / 2
     elif align == "right":
         x -= w
     if valign == "middle":
         y += cap_height(font) / 2
-    p = paint(color, stroke=stroke, blur=blur)
-    if tracking == 0:
-        c.drawString(s, x, y, font, p)
-    else:
-        for ch, ox, _ in glyph_layout(font, s, tracking):
-            c.drawString(ch, x + ox, y, font, p)
+    elif valign == "top":
+        y += cap_height(font)
+    blob = _blob(font, s, tracking, kern)
+    if blob is not None:
+        c.drawTextBlob(blob, x, y, paint(color, stroke=stroke, blur=blur))
     return w
 
 
-def text_path(s: str, x: float, y: float, font: skia.Font) -> skia.Path:
-    blob = skia.TextBlob.MakeFromString(s, font)
+def text_path(s: str, x: float, y: float, font: skia.Font, tracking: float = 0.0,
+              kern: bool = True) -> skia.Path:
+    """Outline of one kerned line with its baseline at (x, y)."""
+    glyphs, xs, _adv, _w = _run(font, s, tracking, kern)
     path = skia.Path()
-    glyphs = font.textToGlyphs(s)
-    xs = font.getXPos(glyphs)
     for g, gx in zip(glyphs, xs):
         gp = font.getPath(g)
         if gp is not None:
             gp.offset(x + gx, y)
             path.addPath(gp)
-    del blob
     return path
+
+
+# --------------------------------------------------------------------- line boxes (layout)
+
+@dataclass(frozen=True)
+class LineBox:
+    """One set line. x is the left edge of the advance box, baseline the baseline y."""
+    text: str
+    x: float
+    baseline: float
+    w: float
+    cap: float
+    ascent: float
+    descent: float
+
+    @property
+    def top(self) -> float:
+        """Cap top: the optical top of the line, used for alignment to the grid."""
+        return self.baseline - self.cap
+
+    @property
+    def bottom(self) -> float:
+        return self.baseline + self.descent
+
+    @property
+    def rect(self) -> skia.Rect:
+        return skia.Rect(self.x, self.baseline - self.ascent, self.x + self.w, self.baseline + self.descent)
+
+
+@dataclass
+class TextBlock:
+    """Lines set with one font, leading and tracking. top = first cap top, h = cap top of the
+    first line to the baseline of the last (the visual block height used for layout)."""
+    lines: list[LineBox]
+    font: skia.Font
+    leading: float      # line pitch in px
+    tracking: float
+    align: str
+
+    @property
+    def top(self) -> float:
+        return self.lines[0].top if self.lines else 0.0
+
+    @property
+    def baseline(self) -> float:
+        """Baseline of the last line."""
+        return self.lines[-1].baseline if self.lines else 0.0
+
+    @property
+    def bottom(self) -> float:
+        return self.lines[-1].bottom if self.lines else 0.0
+
+    @property
+    def h(self) -> float:
+        return self.baseline - self.top
+
+    @property
+    def w(self) -> float:
+        return max((ln.w for ln in self.lines), default=0.0)
+
+    @property
+    def x(self) -> float:
+        return min((ln.x for ln in self.lines), default=0.0)
+
+    @property
+    def rect(self) -> skia.Rect:
+        return skia.Rect(self.x, self.top, self.x + self.w, self.baseline)
+
+    def draw(self, c: skia.Canvas, color: int, **kw) -> None:
+        for ln in self.lines:
+            draw_text(c, ln.text, ln.x, ln.baseline, self.font, color, align="left", tracking=self.tracking, **kw)
+
+
+def block_height(font: skia.Font, n_lines: int, leading: float = 1.2) -> float:
+    """Visual height (first cap top to last baseline) of n lines at a leading multiple."""
+    return cap_height(font) + max(0, n_lines - 1) * leading * font.getSize()
+
+
+def set_lines(font: skia.Font, lines: Sequence[str], x: float, top: float, leading: float = 1.2,
+              tracking: float = 0.0, align: str = "left") -> TextBlock:
+    """Line boxes for already-broken lines. x is the left edge / centre / right edge per align;
+    top is the cap top of the first line; leading is a multiple of the font size."""
+    m = font.getMetrics()
+    cap, asc, desc = cap_height(font), -m.fAscent, m.fDescent
+    pitch = leading * font.getSize()
+    out = []
+    for i, s in enumerate(lines):
+        w = text_w(font, s, tracking)
+        lx = x - w / 2 if align == "center" else x - w if align == "right" else x
+        out.append(LineBox(s, lx, top + cap + i * pitch, w, cap, asc, desc))
+    return TextBlock(out, font, pitch, tracking, align)
+
+
+def layout_text(font: skia.Font, text: str, x: float, top: float, max_w: float, leading: float = 1.2,
+                tracking: float = 0.0, align: str = "left", style: str = "pretty",
+                max_lines: int | None = None) -> TextBlock:
+    """Wrap and set a paragraph; returns line boxes (see set_lines)."""
+    lines = wrap(font, text, max_w, tracking, style=style)
+    if max_lines is not None:
+        lines = lines[:max_lines]
+    return set_lines(font, lines, x, top, leading, tracking, align)
 
 
 # --------------------------------------------------------------------- shapes & paths
