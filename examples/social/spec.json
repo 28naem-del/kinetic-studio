@@ -1,17 +1,26 @@
-// Social / quote clip: pull-quote card, then karaoke captions with an active-word pill.
+// Social clip, beat-locked at 86 BPM (one beat = 0.698 s, an 8th = 0.349 s).
+// Pull-quote revealed word by word on the 8ths (2 bars) -> hard cut on the bar line ->
+// karaoke captions, one sentence per bar, words on the 8ths (2 bars) -> hard cut ->
+// follow card that takes over the karaoke pill (1 bar). Risers end on each cut.
 {
   "mode": "social",
-  "handle": "@kineticstudio",
+  "creator": { "name": "Kinetic Studio", "handle": "@kineticstudio", "series": "One idea a day", "initials": "KS" },
   "music": { "style": "lofi", "bpm": 86 },
   "markers": [
     { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
-    { "kind": "section", "at": "tip", "name": "groove", "energy": 2 }
+    { "kind": "section", "at": "tip", "name": "groove", "energy": 2 },
+    { "kind": "section", "at": "cta", "name": "lift", "energy": 3 }
   ],
   "scenes": [
-    { "type": "quote", "text": "Small steps every day beat big plans you never start.", "author": "Kinetic Studio",
-      "role": "demo quote", "dur": 4.0 },
-    { "type": "karaoke", "id": "tip", "kicker": "TIP OF THE DAY",
-      "text": "Make the first two seconds count. Say one idea, show it big, and let the beat carry the rest.",
-      "per": 0.32, "emphasis": ["one", "big", "beat"], "dur": 7.0 }
+    { "type": "quote", "id": "quote", "kicker": "On momentum",
+      "text": "Small steps every day beat big plans you never start.",
+      "emphasis": ["small", "steps"], "author": "Kinetic Studio", "role": "Notes on making things",
+      "stagger": "1/2b", "dur": "8b" },
+    { "type": "karaoke", "id": "tip", "kicker": "Tip of the day", "transition": { "kind": "cut", "on": "downbeat" },
+      "text": "Make the first two seconds count. Say one idea, show it big.",
+      "per": "1/2b", "emphasis": ["two", "seconds", "one", "big."], "dur": "8b" },
+    { "type": "follow", "id": "cta", "transition": { "kind": "cut", "on": "downbeat" },
+      "kicker": "Follow for more", "text": "One idea a day, cut to the beat.",
+      "button": "Follow", "done": "Following", "tap_at": "2b", "dur": "4b" }
   ]
 }
