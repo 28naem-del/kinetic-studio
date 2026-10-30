@@ -5,8 +5,8 @@ import shutil
 import subprocess
 
 import pytest
-
 from conftest import EXAMPLES
+
 from kstudio import cli, pipeline
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
@@ -47,7 +47,7 @@ def test_render_passes_snap_and_honours_pass(monkeypatch, tmp_path):
     assert cli.main(["render", spec, "-o", out, "--no-audit", "-q"]) == 0 and seen["snap"] is None
     assert cli.main(["render", spec, "-o", out, "--no-audit", "-q", "--snap"]) == 0 and seen["snap"] == "beat"
     seen["want"] = False
-    assert cli.main(["render", spec, "-o", out, "--no-audit", "-q", "--snap", "8th"]) == 3 and seen["snap"] == "8th"
+    assert cli.main(["render", spec, "-o", out, "--no-audit", "-q", "--snap", "8th"]) == 5 and seen["snap"] == "8th"
     with pytest.raises(SystemExit):
         cli.main(["render", spec, "--snap", "quarter"])
 
@@ -68,3 +68,52 @@ def test_audit_cli_fps_and_frames(tmp_path, capsys):
     cli.main(["audit", v, "--fps", "25", "--frames", "50", "--json"])
     r = json.loads(capsys.readouterr().out)
     assert not r["checks"]["fps"]["ok"] and not r["checks"]["frames"]["ok"]
+
+
+def test_interrupted_render_loop_reraises_the_interrupt(monkeypatch, tmp_path):
+    """Ctrl-C in the worker loop stops the workers and leaves as KeyboardInterrupt (exit 130), not RuntimeError."""
+    import queue
+
+    from kstudio import render
+    from kstudio.presets import make_output
+
+    stopped = []
+
+    class Results(queue.Queue):
+        def get(self, *a, **k):
+            raise KeyboardInterrupt
+
+    class Proc:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return True
+
+        def terminate(self):
+            stopped.append("terminate")
+
+        def join(self, timeout=None):
+            stopped.append("join")
+
+    queues = iter([queue.Queue(), Results()])
+
+    class Ctx:
+        def Queue(self):
+            return next(queues)
+
+        Process = Proc
+
+    monkeypatch.setattr(render.mp, "get_context", lambda kind: Ctx())
+    for k in ("KSTUDIO_WORKERS", "KSTUDIO_CV_THREADS_RUN"):  # render_video sets these; restore them afterwards
+        monkeypatch.setenv(k, os.environ.get(k, "1"))
+    log = render.RenderLog(str(tmp_path / "render.log"), echo=False)
+    with pytest.raises(KeyboardInterrupt):
+        render.render_video({}, make_output("reel", 30, "draft", scale=0.25), str(tmp_path / "v.mp4"),
+                            str(tmp_path / "work"), "fp", 60, 1, log=log)
+    log.close()
+    assert stopped == ["terminate", "join"]
+    assert '"render_failed"' in open(tmp_path / "render.log").read()
