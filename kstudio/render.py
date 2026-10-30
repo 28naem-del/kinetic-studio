@@ -39,12 +39,24 @@ def ffprobe_frames(path: str) -> int:
         return -1
 
 
+# Rate control for chunked encodes. Every 2 s chunk is a separate x264 run, and x264 starts each run
+# with the VBV buffer `vbv-init` full; with the old bufsize = 2 x maxrate and the default init of 0.9
+# every chunk could burst ~1.8 s of maxrate into its first second, so the concatenated stream ran at
+# 1.74 x maxrate over 1 s windows. A half-second buffer that starts 30% full, against a ceiling 5%
+# under the level's maxrate, keeps the joined stream inside maxrate x 1.1 (measured 1.06-1.09).
+VBV_RATE = 0.95      # x264 -maxrate as a fraction of Output.maxrate_kbps
+VBV_BUFFER_S = 0.5   # -bufsize in seconds of the nominal maxrate
+VBV_INIT = 0.3       # initial buffer fill of each chunk
+
+
 def encoder_cmd(out: Output, path: str, threads: int = 2) -> list[str]:
+    rate = int(out.maxrate_kbps * VBV_RATE)
+    buf = int(out.maxrate_kbps * VBV_BUFFER_S)
     return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{out.width}x{out.height}", "-r", str(out.fps), "-i", "-",
             "-vf", "scale=out_color_matrix=bt709:out_range=tv",
             "-c:v", "libx264", "-preset", out.x264_preset, "-crf", str(out.crf),
-            "-maxrate", f"{out.maxrate_kbps}k", "-bufsize", f"{out.maxrate_kbps * 2}k",
+            "-maxrate", f"{rate}k", "-bufsize", f"{buf}k", "-x264-params", f"vbv-init={VBV_INIT}",
             "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", out.level,
             "-g", str(out.fps * 2), "-bf", "2", "-threads", str(threads),
             "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
@@ -267,7 +279,7 @@ def video_timing(path: str) -> dict[str, Any]:
             "measured_fps": round(frames / dur, 4) if dur > 0 else 0.0}
 
 
-MUX_CEILING_DBTP = -1.0   # delivery true-peak ceiling measured on the encoded AAC track
+MUX_CEILING_DBTP = -1.3   # delivery true-peak ceiling measured on the encoded AAC track (-1.0 spec, 0.3 dB margin)
 MUX_MAX_TRIES = 6         # encodes: up to 2 local trims, then whole-file gain steps
 
 
@@ -339,7 +351,7 @@ def mux(video: str, audio: str, out_path: str, ceiling_dbtp: float = MUX_CEILING
             if i < min(2, max_tries - 2):  # local fix first
                 if src is None:
                     src = A.read_audio(audio)
-                src, fixes = _local_trim(src, A.read_audio(out_path), ceiling_dbtp - 0.05)
+                src, fixes = _local_trim(src, A.read_audio(out_path), ceiling_dbtp - 0.1)
                 att["local_trims"] = fixes
                 if fixes:
                     A.write_wav(tmp, src)

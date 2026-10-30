@@ -1,6 +1,7 @@
 """Soundtrack mixer: music bed (procedural or user file) + SFX at the film's markers,
 ducking under hits, then loudness normalisation to a target (default -14 LUFS integrated)
-with a look-ahead limiter holding true peak under the ceiling (default -1 dBTP)."""
+with a look-ahead limiter holding true peak under the ceiling (default -1.3 dBTP: the -1 dBTP
+delivery spec with 0.3 dB of margin for the AAC encode and meter disagreement)."""
 from __future__ import annotations
 
 import json
@@ -230,7 +231,7 @@ def place_sfx(film: Any, seed: int = 0) -> list[dict[str, Any]]:
     return out
 
 
-def mix_film(film: Any, out_wav: str, target_lufs: float = -14.0, ceiling_dbtp: float = -1.0,
+def mix_film(film: Any, out_wav: str, target_lufs: float = -14.0, ceiling_dbtp: float = -1.3,
              seed: int = 0) -> dict[str, Any]:
     """Bed + SFX -> ducking -> loudness loop -> true-peak limiter -> WAV.
 
