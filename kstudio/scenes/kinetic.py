@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any
 
 import skia
 
@@ -92,30 +91,44 @@ def _repeat_row(c: skia.Canvas, text: str, y: float, f: skia.Font, color: int, o
 
 # ---------------------------------------------------------------------- chrome
 
-_TICKER: dict[int, str] = {}
+_TICKER: dict[int, list[tuple[int, str]]] = {}
 
 
-def _ticker_text(ctx: Ctx, scene: Scene) -> str:
+def _scene_words(sc: Scene) -> str:
+    p = sc.p
+    if isinstance(p.get("lines"), list) and sc.type == "stack":
+        return " ".join(str(x) for x in p["lines"])
+    if isinstance(p.get("words"), list):
+        return " ".join(str(x) for x in p["words"])
+    if isinstance(p.get("text"), str) and p.get("text"):
+        return str(p["text"])
+    return ""
+
+
+def _ticker_segments(ctx: Ctx, scene: Scene) -> list[tuple[int, str]]:
+    """(scene index, words) for every scene of the film with words, de-duplicated in order.
+    A scene whose words repeat an earlier scene's shares that segment."""
     own = scene.p.get("ticker")
     if isinstance(own, str) and own.strip():
-        return own.upper()
+        return [(-1, own.upper())]
     film = ctx.film
     key = id(film)
     if key not in _TICKER:
-        parts: list[str] = []
-        for sc in (film.scenes if film is not None else [scene]):
-            p = sc.p
-            if isinstance(p.get("lines"), list) and sc.type == "stack":
-                parts.append(" ".join(str(x) for x in p["lines"]))
-            elif isinstance(p.get("words"), list):
-                parts.append(" ".join(str(x) for x in p["words"]))
-            elif isinstance(p.get("text"), str) and p.get("text"):
-                parts.append(str(p["text"]))
-        txt = "  •  ".join(dict.fromkeys(x.upper() for x in parts if x.strip()))
-        _TICKER[key] = txt or "KINETIC"
+        segs: list[tuple[int, str]] = []
+        seen: dict[str, int] = {}
+        for j, sc in enumerate(film.scenes if film is not None else [scene]):
+            txt = _scene_words(sc).upper().strip()
+            if txt and txt not in seen:
+                seen[txt] = j
+                segs.append((j, txt))
+        _TICKER[key] = segs or [(-1, "KINETIC")]
         if len(_TICKER) > 32:
             _TICKER.pop(next(iter(_TICKER)))
     return _TICKER[key]
+
+
+def _ticker_text(ctx: Ctx, scene: Scene) -> str:
+    return "  •  ".join(t for _, t in _ticker_segments(ctx, scene))
 
 
 def _chrome_on(scene: Scene) -> bool:
@@ -136,9 +149,24 @@ def content_floor(ctx: Ctx, scene: Scene) -> float:
     return rule_y - g.bl(2) - D.cap_height(fm) - g.bl(3)
 
 
-def draw_chrome(ctx: Ctx, scene: Scene, ground: str) -> None:
-    """Scene index (left) and tempo + beat dot + beat counter (right) over a hairline, then a
-    ticker strip on the bottom safe line. Kept off the top line, which belongs to the handle."""
+def _chrome_rows(ctx: Ctx) -> tuple[float, float, float]:
+    """(ticker baseline, hairline y, label baseline) of the chrome block on the bottom safe line."""
+    g = L.grid(ctx)
+    fk = L.TYPE["kicker"].font(ctx, weight=700)
+    base = g.safe_bottom
+    rule_y = base - D.cap_height(fk) - g.bl(3)
+    return base, rule_y, rule_y - g.bl(2)
+
+
+def draw_chrome(ctx: Ctx, scene: Scene, ground: str, plate: bool = False) -> None:
+    """Chrome block on the bottom safe line, in three levels of emphasis.
+
+    Label row (meta): scene number in the accent, the count and scene type quiet on the left;
+    beat dot, tempo and a running beat counter on the right. Hairline: the scene's progress,
+    filled in the accent one beat step at a time (out_expo over 1/4 beat). Ticker (kicker): the
+    film's words scrolling on the beat clock; the current scene's words are at full ink, the
+    rest recede, bullets in the accent. `plate` lays a ground-coloured band behind the block
+    for full-bleed scenes (marquee). Kept off the top line, which belongs to the handle."""
     if not _chrome_on(scene):
         return
     g = L.grid(ctx)
@@ -147,38 +175,59 @@ def draw_chrome(ctx: Ctx, scene: Scene, ground: str) -> None:
     acc = _accent_on(ctx, ground)
     meta = L.TYPE["meta"]
     fm = meta.font(ctx, weight=600)
+    fmb = meta.font(ctx, weight=800)
     tk = meta.tk(ctx)
     pulse = _beat_pulse(ctx, 0.5)
-    # bottom: ticker baseline on the safe line, labels above a hairline
     kick = L.TYPE["kicker"]
     fk = kick.font(ctx, weight=700)
-    base = g.safe_bottom
-    cap_k = D.cap_height(fk)
-    rule_y = base - cap_k - g.bl(3)
-    c.drawRect(skia.Rect(g.x0, rule_y, g.x1, rule_y + max(1.0, g.px(2))), D.paint(ctx.pal(ink, 0.28)))
+    ktk = kick.tk(ctx)
+    cap_k, cap_m = D.cap_height(fk), D.cap_height(fm)
+    base, rule_y, lab_y = _chrome_rows(ctx)
+    if plate:
+        top = lab_y - cap_m - g.bl(4)
+        c.drawRect(skia.Rect(0, top, ctx.W, base + g.bl(4)), D.paint(ctx.pal(ground, 0.9)))
+    # hairline + beat-stepped progress of the scene
+    hair = max(1.0, g.px(2))
+    c.drawRect(skia.Rect(g.x0, rule_y, g.x1, rule_y + hair), D.paint(ctx.pal(ink, 0.22)))
+    nb = max(1, int(round(ctx.dur / max(ctx.beat_len, 1e-6))))
+    lb = max(0.0, ctx.local_beat)
+    step = min(float(nb), math.floor(lb + 1e-6) + E.out_expo(min(1.0, (lb % 1.0) / 0.25)))
+    c.drawRect(skia.Rect(g.x0, rule_y - hair, g.x0 + g.content_w * step / nb, rule_y + 2 * hair),
+               D.paint(ctx.pal(acc, 0.9)))
     film = ctx.film
     idx, n = 1, 1
     if film is not None and scene in film.scenes:
         idx, n = film.scenes.index(scene) + 1, len(film.scenes)
     gb = int(math.floor(ctx.tl.time_to_beat(ctx.start + ctx.lt) + 1e-6)) + 1
-    lab_y = rule_y - g.bl(2)
-    D.draw_text(c, f"({idx:02d}/{n:02d})  {scene.type.upper()}", g.x0, lab_y, fm, ctx.pal(ink, 0.62),
-                align="left", tracking=tk)
-    w = D.draw_text(c, f"{ctx.tl.bpm:.0f} BPM  BEAT {gb:03d}", g.x1, lab_y, fm, ctx.pal(ink, 0.5 + 0.35 * pulse),
-                    align="right", tracking=tk)
+    x = g.x0
+    x += D.draw_text(c, f"{idx:02d}", x, lab_y, fmb, ctx.pal(acc), align="left", tracking=tk)
+    x += D.draw_text(c, f"/{n:02d}", x, lab_y, fm, ctx.pal(ink, 0.42), align="left", tracking=tk)
+    D.draw_text(c, scene.type.upper(), x + g.px(28), lab_y, fm, ctx.pal(ink, 0.72), align="left", tracking=tk)
+    w = D.draw_text(c, f"{gb:03d}", g.x1, lab_y, fmb, ctx.pal(ink, 0.6 + 0.4 * pulse), align="right", tracking=tk)
+    w += D.draw_text(c, f"{ctx.tl.bpm:.0f} BPM  BEAT ", g.x1 - w, lab_y, fm, ctx.pal(ink, 0.42),
+                     align="right", tracking=tk)
     r = g.px(7) * (1 + 0.35 * pulse)  # beat dot, flashing on the beat
-    c.drawCircle(g.x1 - w - g.px(20), lab_y - D.cap_height(fm) / 2, r, D.paint(ctx.pal(acc, 0.35 + 0.65 * pulse)))
+    c.drawCircle(g.x1 - w - g.px(20), lab_y - cap_m / 2, r, D.paint(ctx.pal(acc, 0.35 + 0.65 * pulse)))
     # ticker: one 16th-note step of travel per 16th (continuous across cuts: film beat clock)
     beat_abs = ctx.tl.time_to_beat(ctx.start + ctx.lt)
     off = -beat_abs * g.px(64)
+    segs = _ticker_segments(ctx, scene)
+    cur = _scene_words(scene).upper().strip()
+    sep = "  •  "
+    sep_w = D.text_w(fk, sep, tracking=ktk)
+    dot_w = D.text_w(fk, "•", tracking=ktk)
+    widths = [D.text_w(fk, t, tracking=ktk) for _, t in segs]
+    uw = max(sum(widths) + sep_w * len(segs), 1.0)
     c.save()
     c.clipRect(skia.Rect(g.x0, base - cap_k - g.bl(1), g.x1, base + g.bl(2)))
-    txt = _ticker_text(ctx, scene) + "  •  "
-    uw = max(D.text_w(fk, txt, tracking=kick.tk(ctx)), 1.0)
     x = g.x0 - uw + (off % uw)
     while x < g.x1:
-        D.draw_text(c, txt, x, base, fk, ctx.pal(ink, 0.78), align="left", tracking=kick.tk(ctx))
-        x += uw
+        for (_, t), tw in zip(segs, widths):
+            if x + tw > g.x0 and x < g.x1:
+                D.draw_text(c, t, x, base, fk, ctx.pal(ink, 0.95 if t == cur else 0.55), align="left", tracking=ktk)
+            x += tw
+            D.draw_text(c, "•", x + (sep_w - dot_w) / 2, base, fk, ctx.pal(acc, 0.85), align="left")
+            x += sep_w
     c.restore()
 
 
@@ -191,10 +240,11 @@ class Slam(Scene):
     Each word lands in `land` ("1/3b"): scale 1.45 -> 1, a small roll, and the variable axes
     wdth 70 -> `width`, wght 600 -> `weight` (out_expo). `rows` outline echo rows cascade below
     the word (and `rows_above` above it), each 1/8 beat later, sliding sideways on the beat grid
-    so the frame stays full and alive between hits. `echo` adds the scale-out ghost on the hit."""
+    so the frame stays full and alive between hits. `echo` adds the scale-out ghost on the hit
+    and `bar` an accent rule that snaps out under each word on its hit."""
     defaults = {"per": "1b", "flip": True, "grounds": ["bg", "accent", "paper"], "style": "fill",
                 "accent_words": [], "weight": 900, "width": 112, "echo": True, "sfx": "hit", "first_sfx": "impact",
-                "land": LAND, "rows": 4, "rows_above": 2, "row_stagger": "1/8b"}
+                "land": LAND, "rows": 4, "rows_above": 2, "row_stagger": "1/8b", "bar": True}
     time_params = ("land", "row_stagger")
 
     def _per(self) -> float:
@@ -254,7 +304,7 @@ class Slam(Scene):
         rows += [(k, a) for k, a in zip(range(1, int(self.p["rows"]) + 1), (0.52, 0.34, 0.22, 0.14, 0.09, 0.06))]
         beat = ctx.local_beat
         c.save()
-        c.clipRect(skia.Rect(0, 0, ctx.W, content_floor(ctx, self)))
+        c.clipRect(skia.Rect(0, L.grid(ctx).safe_top, ctx.W, content_floor(ctx, self)))
         for k, alpha in rows:
             d = abs(k)
             uk = u - d * stag
@@ -290,7 +340,25 @@ class Slam(Scene):
         D.draw_text(c, word, 0, 0, f, ctx.pal(color),  # hard cut in: full on the hit frame
                     stroke=(5 * ctx.s if outline else 0), valign="middle")
         c.restore()
+        if self.p["bar"]:
+            self._impact_bar(ctx, word, f, u, per, cap * sc, ground)
         draw_chrome(ctx, self, ground)
+
+    def _impact_bar(self, ctx: Ctx, word: str, f: skia.Font, u: float, per: float, cap: float,
+                    ground: str) -> None:
+        """Accent rule under the hero: snaps out from the centre to the word's width on the hit
+        (out_expo over 1/4 beat) and draws back to a point in the last 1/4 beat (in_quart), so
+        every landing is underlined and the next word lands on a clean frame."""
+        g = L.grid(ctx)
+        q = max(ctx.beats(0.25), 1e-3)
+        grow = E.out_expo(E.clamp(u / q))
+        back = E.in_quart(E.clamp((u - (per - q)) / q))
+        half = D.text_w(f, word) / 2 * max(0.0, grow - back)
+        if half < 0.5:
+            return
+        y = ctx.cy + cap / 2 + g.bl(3)
+        col = ctx.theme["ink_dark"] if ground == "accent" else ctx.theme["accent"]
+        ctx.c.drawRect(skia.Rect(ctx.cx - half, y, ctx.cx + half, y + g.bl(1.5)), D.paint(ctx.pal(col)))
 
 
 def g_px(ctx: Ctx, ref: float) -> float:
@@ -394,30 +462,71 @@ class Type3D(Scene):
         imp = float(self.p["impact"])
         return 2.0 if lt < imp + 0.12 else 1.0
 
-    def _pose(self, ctx: Ctx) -> tuple[float, float, float, float, float]:
-        """(rx, ry, rz, scale, extrude 0..1) at the current time."""
+    FILL = 0.90       # projected face width at the settled pose, x frame width (hero words)
+    RX, RY, SWAY = -14.0, -16.0, 6.0  # settled tilt / yaw and the once-per-bar sway (degrees)
+
+    def _angles(self, ctx: Ctx) -> tuple[float, float, float, float, float]:
+        """(rx, ry, rz, scale, extrude 0..1) before levelling."""
         lt = ctx.lt
         imp = float(self.p["impact"])
         e_in = E.out_expo(lt / max(imp, 1e-3))
         ex = E.out_expo((lt - imp) / max(ctx.beats(1 / 3), 1e-3)) if lt >= imp else 0.0
         bar = max(ctx.local_beat - self.tl.beats_of(imp, self.start), 0.0) / 4.0
         sway = math.sin(2 * math.pi * bar) * (1 - math.exp(-6 * bar))
-        ry = math.radians(self.p["swing"] * (1 - e_in) - 16 * ex - 9 * sway)
-        rx = math.radians(-14 * ex + 5 * math.sin(2 * math.pi * bar * 0.5))
+        ry = math.radians(self.p["swing"] * (1 - e_in) + self.RY * ex - self.SWAY * sway)
+        rx = math.radians(self.RX * ex + 4 * math.sin(2 * math.pi * bar * 0.5))
         rz = math.radians(-4 * (1 - e_in))
         # impact squash: a 3 % kick on the hit, out_expo back over half a beat
         kick = 0.03 * (1 - E.out_expo((lt - imp) / max(ctx.beats(0.5), 1e-3))) if lt >= imp else 0.0
         scale = (0.82 + 0.18 * e_in) * (1 + kick)
         return rx, ry, rz, scale, ex
 
+    @staticmethod
+    def _level(ctx: Ctx, half_w: float, rx: float, ry: float, rz: float, scale: float) -> float:
+        """Roll that keeps the projected cap midline level (yaw + tilt in perspective otherwise
+        slant the word downhill); two fixed-point steps are within 0.05 degree."""
+        cx, cy = ctx.cx, ctx.cy
+        z = rz
+        for _ in range(2):
+            m = D.persp3d(cx, cy, rx, ry, z, dist=1400 * ctx.s, scale=scale)
+            pts = []
+            for x in (cx - half_w, cx + half_w):
+                pw = m.rc(3, 0) * x + m.rc(3, 1) * cy + m.rc(3, 3)
+                pts.append(((m.rc(0, 0) * x + m.rc(0, 1) * cy + m.rc(0, 3)) / pw,
+                            (m.rc(1, 0) * x + m.rc(1, 1) * cy + m.rc(1, 3)) / pw))
+            z -= math.atan2(pts[1][1] - pts[0][1], pts[1][0] - pts[0][0])
+        return z
+
+    def _pose(self, ctx: Ctx, f: skia.Font | None = None) -> tuple[float, float, float, float, float]:
+        """(rx, ry, rz, scale, extrude 0..1) at the current time; the roll levels the word once
+        it has swung in (blended in with the entry)."""
+        rx, ry, rz, scale, ex = self._angles(ctx)
+        f = f if f is not None else self.font_for(ctx)
+        imp = float(self.p["impact"])
+        e_in = E.out_expo(ctx.lt / max(imp, 1e-3))
+        lev = self._level(ctx, D.text_w(f, str(self.p["text"])) / 2, rx, ry, rz, scale)
+        return rx, ry, E.lerp(rz, lev, e_in), scale, ex
+
     def font_for(self, ctx: Ctx) -> skia.Font:
-        return ctx.fit("display", str(self.p["text"]), _hero_w(ctx) * 1.02, _max_type(ctx) * 1.25,
-                       self.p["weight"], self.p["width"])
+        """Face sized so its projected width at the settled pose (levelled, no sway) is FILL x W,
+        the same fill as the flat hero words."""
+        text = str(self.p["text"])
+        key = (ctx.W, ctx.H, text, self.p["weight"], self.p["width"])
+        cache = self.__dict__.setdefault("_fit_cache", {})
+        if key not in cache:
+            f0 = ctx.fit("display", text, _hero_w(ctx), _max_type(ctx) * 1.25, self.p["weight"], self.p["width"])
+            rx, ry = math.radians(self.RX), math.radians(self.RY)
+            hw = D.text_w(f0, text) / 2
+            rz = self._level(ctx, hw, rx, ry, 0.0, 1.0)
+            lo, hi = self._bounds(ctx, f0, (rx, ry, rz, 1.0), ctx.cx, ctx.cy)
+            size = min(f0.getSize() * self.FILL * ctx.W / max(hi - lo, 1.0), _max_type(ctx) * 1.25)
+            cache[key] = size
+        return ctx.font("display", cache[key], int(self.p["weight"]), float(self.p["width"]))
 
     def draw(self, ctx: Ctx) -> None:
         text = str(self.p["text"])
         f = self.font_for(ctx)
-        rx, ry, rz, scale, ex = self._pose(ctx)
+        rx, ry, rz, scale, ex = self._pose(ctx, f)
         cap = D.cap_height(f)
         cx, cy = ctx.cx, ctx.H * float(self.p["y"])
         lo, hi = self._bounds(ctx, f, (rx, ry, rz, scale), cx, cy)
@@ -477,7 +586,7 @@ class Type3D(Scene):
     def projected_width(self, ctx: Ctx) -> float:
         """Screen width of the word's face at the current pose (for tests / layout checks)."""
         f = self.font_for(ctx)
-        rx, ry, rz, scale, _ = self._pose(ctx)
+        rx, ry, rz, scale, _ = self._pose(ctx, f)
         lo, hi = self._bounds(ctx, f, (rx, ry, rz, scale), ctx.cx, ctx.H * float(self.p["y"]))
         return hi - lo
 
@@ -676,7 +785,7 @@ class Marquee(Scene):
             if hero:
                 c.restore()
         c.restore()
-        draw_chrome(ctx, self, self.ground)
+        draw_chrome(ctx, self, self.ground, plate=True)
 
 
 # ---------------------------------------------------------------------- burst
@@ -688,9 +797,11 @@ class Burst(Scene):
     The word lands in `land` (1/3 beat) with the axes stretching (wdth 70 -> `width`,
     wght 600 -> `weight`), then pumps on every beat with a new shock ring (beat-locked).
     `rows` outline copies stack above and below the word, cascading out 1/8 beat apart after
-    the landing and flashing brighter on every beat."""
+    the landing and sliding sideways on the beat grid, flashing brighter on every beat. Behind
+    it a sunburst of `rays` accent wedges opens on the drop, steps on every beat and turns
+    `spin` degrees per beat."""
     defaults = {"text": "NOW", "weight": 900, "width": 125, "lines": 70, "color": "accent", "land": LAND,
-                "rows": 3, "row_stagger": "1/8b"}
+                "rows": 3, "row_stagger": "1/8b", "rays": 18, "spin": 24.0}
     time_params = ("land", "row_stagger")
 
     def cues(self) -> list[Cue]:
@@ -699,10 +810,42 @@ class Burst(Scene):
     def shutter(self, lt: float) -> float:
         return 2.5 if lt < 0.25 else 1.0
 
+    def _rays(self, ctx: Ctx, R: float, pulse: float) -> None:
+        """Sunburst behind the word: `rays` wedges in the accent, fading in from the centre,
+        thrown open on the drop (out_expo over 1/2 beat) and stepping 1/(2 x rays) of a turn on
+        every beat (out_expo over 0.4 beat) on top of a steady `spin` (degrees per beat), so the
+        ground itself counts the bar and never holds still."""
+        n = int(self.p["rays"])
+        if n <= 0:
+            return
+        c = ctx.c
+        lb = max(0.0, ctx.local_beat)
+        open_ = E.out_expo(E.clamp(lb / 0.5))
+        step = math.floor(lb + 1e-6) + E.out_expo((lb % 1.0) / 0.4)
+        rot = 7.0 + step * 180.0 / n + lb * float(self.p["spin"])
+        half = 180.0 / n * 0.5 * open_
+        col = ctx.pal.rgb(self.p["color"])
+        a_out = int(255 * (0.13 + 0.05 * pulse))
+        shader = skia.GradientShader.MakeRadial(
+            skia.Point(ctx.cx, ctx.cy), R * 0.62,
+            [skia.Color(*col, 0), skia.Color(*col, int(a_out * 0.45)), skia.Color(*col, a_out)],
+            [0.0, 0.35, 1.0])
+        paint = skia.Paint(AntiAlias=True, Shader=shader)
+        path = skia.Path()
+        for k in range(n):
+            a0 = math.radians(rot + k * 360.0 / n - half)
+            a1 = math.radians(rot + k * 360.0 / n + half)
+            path.moveTo(ctx.cx, ctx.cy)
+            path.lineTo(ctx.cx + math.cos(a0) * R, ctx.cy + math.sin(a0) * R)
+            path.lineTo(ctx.cx + math.cos(a1) * R, ctx.cy + math.sin(a1) * R)
+            path.close()
+        c.drawPath(path, paint)
+
     def draw(self, ctx: Ctx) -> None:
         c, lt = ctx.c, ctx.lt
         rnd = random.Random(42)
         R = math.hypot(ctx.W, ctx.H)
+        self._rays(ctx, R, _beat_pulse(ctx, 0.5))
         speed = 1 - E.out_quint(lt / max(self.dur, 0.1))
         ink = ctx.pal.on(self.ground)
         flow = 0.35 + 0.65 * speed
@@ -737,7 +880,7 @@ class Burst(Scene):
         stag = float(self.p["row_stagger"])
         sw = max(1.5, 2.8 * ctx.s)
         c.save()
-        c.clipRect(skia.Rect(0, 0, ctx.W, content_floor(ctx, self)))
+        c.clipRect(skia.Rect(0, L.grid(ctx).safe_top, ctx.W, content_floor(ctx, self)))
         for k in range(1, int(self.p["rows"]) + 1):
             uk = lt - ctx.beats(0.25) - (k - 1) * stag
             if uk < 0:
@@ -746,7 +889,9 @@ class Burst(Scene):
             a = (0.5 / k) * er * (0.6 + 0.4 * pulse)
             for sgn in (-1, 1):
                 y = ctx.cy + sgn * k * cap * 1.32 * er
-                c.save(); c.translate(ctx.cx, y); c.scale(k_, k_)
+                # rows slide sideways on the beat grid, alternating, like the slam cascade
+                dx = (1 if (k + (sgn > 0)) % 2 else -1) * g_px(ctx, 34) * k * ctx.local_beat
+                c.save(); c.translate(ctx.cx + dx, y); c.scale(k_, k_)
                 D.draw_text(c, text, 0, 0, f, ctx.pal(self.p["color"], a), stroke=sw / k_, valign="middle")
                 c.restore()
         c.restore()
@@ -765,13 +910,31 @@ class Countdown(Scene):
     """Big numbers counting down on the beat (3, 2, 1) with a ring sweep.
 
     Each number lands with the axes (wdth 70 -> 100, wght 600 -> 900, out_expo over 1/3 beat);
-    an outer tick ring steps round on every beat and pips under the ring count the beats."""
+    an outer tick ring steps round on every beat and pips under the ring count the beats (the
+    current pip fills out_expo over 1/4 beat). Layout on the grid: the tick ring stays inside
+    the side margins, and the ring and pips sit above the chrome block (`content_floor`), so
+    the pips never touch the chrome labels."""
     defaults = {"from": 3, "per": "1b", "label": ""}
 
     def cues(self) -> list[Cue]:
         per = self.tl.resolve_dur(self.p["per"], self.start)
         return [Cue("sfx", i * per, data={"sound": "tick" if i < int(self.p["from"]) - 1 else "hit"})
                 for i in range(int(self.p["from"]))]
+
+    RING_OUT = 1.29   # outer edge of the long ticks, in ring radii
+    PIP_H = 12.0      # reference px
+
+    def layout(self, ctx: Ctx) -> dict[str, float]:
+        """Ring centre / radius and the pip row, fitted between the safe top and the chrome."""
+        g = L.grid(ctx)
+        floor = min(content_floor(ctx, self), g.safe_bottom)
+        rad = min(min(ctx.W, ctx.H) * 0.32, (g.content_w / 2 - g.bl(1)) / self.RING_OUT)
+        ph = g.px(self.PIP_H)
+        pip_gap = g.bl(6)
+        cy = min(ctx.cy, floor - g.bl(4) - ph - pip_gap - rad * self.RING_OUT)
+        cy = max(cy, g.safe_top + rad * self.RING_OUT + g.bl(2))
+        pip_y = cy + rad * self.RING_OUT + pip_gap
+        return {"cx": ctx.cx, "cy": cy, "rad": rad, "pip_y": pip_y, "pip_h": ph, "floor": floor}
 
     def draw(self, ctx: Ctx) -> None:
         per = self.tl.resolve_dur(self.p["per"], self.start)
@@ -781,38 +944,41 @@ class Countdown(Scene):
         u = ul / per
         num = str(n - i)
         g = L.grid(ctx)
-        size = _max_type(ctx) * 1.2
+        lay = self.layout(ctx)
+        rad, cx, cy = lay["rad"], lay["cx"], lay["cy"]
+        size = min(_max_type(ctx) * 1.2, rad * 1.8)
         e, wg, wdh = _land_axes(ul, ctx.beats(1 / 3), 900, 100)
         f = _axfont(ctx, "display", size, wg, wdh)
         c = ctx.c
-        rad = min(ctx.W, ctx.H) * 0.32
-        cx, cy = ctx.cx, ctx.cy
         ink = ctx.pal.on(self.ground)
         c.drawArc(skia.Rect(cx - rad, cy - rad, cx + rad, cy + rad), -90, 360 * (1 - u), False,
                   D.paint(ctx.pal("accent"), stroke=14 * ctx.s))
-        # outer tick ring: 48 ticks, steps 1/16 turn per beat (out_expo), accent tick at the head
+        # outer tick ring: 48 ticks, steps 1/16 turn per beat (out_expo), long tick every 4th
         step = math.floor(ctx.local_beat + 1e-6) + E.out_expo((ctx.local_beat % 1.0) / 0.4)
         rot = step * 360 / 16
         r1, r2 = rad * 1.16, rad * 1.24
         tp = D.paint(ctx.pal(ink, 0.45), stroke=max(1.0, 3 * ctx.s))
         for k in range(48):
             a = math.radians(rot + k * 7.5 - 90)
-            rr = r2 + (rad * 0.05 if k % 4 == 0 else 0)
+            rr = r2 + (rad * (self.RING_OUT - 1.24) if k % 4 == 0 else 0)
             c.drawLine(cx + math.cos(a) * r1, cy + math.sin(a) * r1, cx + math.cos(a) * rr, cy + math.sin(a) * rr, tp)
         sc = 1 + 0.3 * (1 - e)
         c.save(); c.translate(cx, cy); c.scale(sc, sc)
         D.draw_text(c, num, 0, 0, f, ctx.pal(ink), valign="middle")
         c.restore()
-        # beat pips under the ring
-        pw, ph, gap = g.px(84), g.px(12), g.px(16)
+        # beat pips under the ring: the current one fills from the left on its beat
+        pw, ph, gap = g.px(84), lay["pip_h"], g.px(16)
         x = cx - (n * pw + (n - 1) * gap) / 2
-        y = cy + rad * 1.24 + g.bl(10)
+        y = lay["pip_y"]
+        fill = E.out_expo(E.clamp(ul / max(ctx.beats(0.25), 1e-3)))
         for k in range(n):
-            on = k <= i
-            c.drawRect(skia.Rect.MakeXYWH(x, y, pw, ph), D.paint(ctx.pal("accent" if on else ink, 1.0 if on else 0.25)))
+            c.drawRect(skia.Rect.MakeXYWH(x, y, pw, ph), D.paint(ctx.pal(ink, 0.22)))
+            if k <= i:
+                wk = pw * (fill if k == i else 1.0)
+                c.drawRect(skia.Rect.MakeXYWH(x, y, wk, ph), D.paint(ctx.pal("accent")))
             x += pw + gap
         if self.p["label"]:
             r = L.TYPE["kicker"]
-            D.draw_text(c, str(self.p["label"]).upper(), cx, cy - rad * 1.24 - g.bl(8), r.font(ctx, weight=700),
-                        ctx.pal("muted"), tracking=0.3)
+            D.draw_text(c, str(self.p["label"]).upper(), cx, cy - rad * self.RING_OUT - g.bl(4),
+                        r.font(ctx, weight=700), ctx.pal("muted"), tracking=0.3)
         draw_chrome(ctx, self, self.ground)
