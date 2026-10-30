@@ -13,7 +13,17 @@ from typing import Any
 
 import numpy as np
 
-STILL_THRESHOLD = 0.6     # mean abs luma diff (0-255) at 1/8 scale below which a frame counts as "still"
+STILL_THRESHOLD = 0.6     # raw metric: mean abs luma diff (0-255) at 1/8 scale below which a frame is "still"
+# Motion is judged on a grain-free basis. Film grain is re-seeded every frame, so on the delivered file
+# every frame differs from the last by ~2-3 levels at 1/8 scale (well over STILL_THRESHOLD) and the raw
+# ratio reads 1.0 for any graded render. Grain is independent from frame to frame, so it adds the same
+# 2 sigma^2 to the squared 1-frame and 2-frame differences, while a steady move adds m^2 and 4 m^2:
+# m = sqrt((D2^2 - (D1^2 + D0^2) / 2) / 3) is the motion with the noise cancelled, without knowing sigma.
+# MOTION_GATE is the m (RMS, 0-255 luma at 1/8 scale) below which a frame counts as still. It was
+# calibrated against the designed motion (grain off, pre-encode, the raw metric): kinetic 0.982 vs
+# 0.987, explainer 0.493 vs 0.502 and 0.542 vs 0.528 (grain-free encode), promo 0.601 vs 0.646;
+# 1.5 over-reads the explainer by 0.05-0.08 and 2.0 under-reads it by 0.07-0.09.
+MOTION_GATE = 1.75
 BLACK_THRESHOLD = 10.0    # mean luma below which a frame counts as black
 
 
@@ -45,11 +55,16 @@ def probe(path: str) -> dict[str, Any]:
 
 
 def motion_stats(path: str, width: int, height: int, fps: float) -> dict[str, Any]:
+    """Per-frame motion of a video at 1/8 scale (see MOTION_GATE): the denoised motion ratio and
+    longest hold, plus the raw grain-inclusive ratio, mean luma diff and black frames."""
     w, h = max(16, width // 8) // 2 * 2, max(16, height // 8) // 2 * 2
     proc = subprocess.Popen(["ffmpeg", "-v", "error", "-i", path, "-vf", f"scale={w}:{h}:flags=area,format=gray",
                              "-f", "rawvideo", "-"], stdout=subprocess.PIPE)
-    diffs, lum = [], []
-    prev = None
+    diffs: list[float] = []
+    sq: list[float] = []    # mean squared 1-frame difference, frame k-1 -> k
+    sq2: list[float] = []   # mean squared 2-frame difference, frame k-2 -> k
+    lum: list[float] = []
+    win: list[np.ndarray] = []
     fsz = w * h
     while True:
         buf = proc.stdout.read(fsz)  # type: ignore[union-attr]
@@ -57,27 +72,56 @@ def motion_stats(path: str, width: int, height: int, fps: float) -> dict[str, An
             break
         f = np.frombuffer(buf, np.uint8).astype(np.float32)
         lum.append(float(f.mean()))
-        if prev is not None:
-            diffs.append(float(np.abs(f - prev).mean()))
-        prev = f
+        if win:
+            d = f - win[-1]
+            diffs.append(float(np.abs(d).mean()))
+            sq.append(float(np.dot(d, d)) / fsz)
+        if len(win) == 2:
+            d2 = f - win[0]
+            sq2.append(float(np.dot(d2, d2)) / fsz)
+        win = (win + [f])[-2:]
     proc.wait()
     d = np.array(diffs) if diffs else np.zeros(1)
-    still = d < STILL_THRESHOLD
-    longest = run = 0
-    for s in still:
-        run = run + 1 if s else 0
-        longest = max(longest, run)
+    m = denoised_motion(sq, sq2) if diffs else np.zeros(1)
+    still = m < MOTION_GATE
+
+    def longest_run(flags: np.ndarray) -> int:
+        longest = run = 0
+        for s in flags:
+            run = run + 1 if s else 0
+            longest = max(longest, run)
+        return longest
+
+    raw_still = d < STILL_THRESHOLD
     lum_a = np.array(lum) if lum else np.zeros(1)
     return {"frames_decoded": len(lum), "motion_ratio": round(float(1 - still.mean()), 3),
-            "still_ratio": round(float(still.mean()), 3), "longest_hold_s": round(longest / fps, 2) if fps else None,
+            "still_ratio": round(float(still.mean()), 3),
+            "longest_hold_s": round(longest_run(still) / fps, 2) if fps else None,
+            "motion_basis": f"denoised (two-lag, gate {MOTION_GATE})",
+            "motion_ratio_raw": round(float(1 - raw_still.mean()), 3),
+            "longest_hold_raw_s": round(longest_run(raw_still) / fps, 2) if fps else None,
             "mean_motion": round(float(d.mean()), 2), "black_frames": int((lum_a < BLACK_THRESHOLD).sum()),
             "first_frame_black": bool(lum_a[0] < BLACK_THRESHOLD)}
+
+
+def denoised_motion(sq: list[float], sq2: list[float]) -> np.ndarray:
+    """Noise-cancelled motion per frame step. ``sq[k]`` = mean squared difference of frames k -> k+1,
+    ``sq2[k]`` = frames k -> k+2. Step k uses the triple (k-1, k, k+1), the first step (0, 1, 2)."""
+    n = len(sq)
+    if n < 2 or not sq2:
+        return np.sqrt(np.asarray(sq, np.float64)) if n else np.zeros(1)
+    out = np.empty(n)
+    for k in range(n):
+        j = min(max(k - 1, 0), len(sq2) - 1)       # 2-frame span j -> j+2 covering step k
+        e = (sq2[j] - 0.5 * (sq[j] + sq[j + 1])) / 3.0
+        out[k] = np.sqrt(max(e, 0.0))
+    return out
 
 
 def audit(path: str, expect: dict[str, Any] | None = None, thresholds: dict[str, Any] | None = None) -> dict[str, Any]:
     from .audio.mix import measure
     expect = expect or {}
-    th = {"min_motion": 0.6, "max_hold": 2.0, "lufs": -14.0, "lufs_tol": 1.0, "max_true_peak": -1.0,
+    th = {"min_motion": 0.6, "max_hold": 2.0, "lufs": -14.0, "lufs_tol": 1.0, "max_true_peak": -1.3,
           "max_black_frames": 0, "fps_tol": 0.01}
     th.update(thresholds or {})
     p = probe(path)
@@ -138,6 +182,9 @@ def format_report(r: dict[str, Any]) -> str:
     p, m = r["probe"], r["motion"]
     lines.append(f"  {p['width']}x{p['height']} @ {p['fps']} fps, {p['duration']} s, {p['size_mb']} MB, "
                  f"level {p['level']}, {p['bitrate_kbps']} kbps; mean motion {m['mean_motion']}, black frames {m['black_frames']}")
+    if "motion_ratio_raw" in m:
+        lines.append(f"  motion {m['motion_basis']}: {m['motion_ratio']} (raw, grain included: {m['motion_ratio_raw']}, "
+                     f"longest raw hold {m['longest_hold_raw_s']} s)")
     if r.get("loudness"):
         lo = r["loudness"]
         lines.append(f"  loudness {lo['lufs']} LUFS, true peak {lo['true_peak']} dBTP, LRA {lo['lra']} LU "
