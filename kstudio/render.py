@@ -244,6 +244,7 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
         progress: dict[int, int] = {}
         remaining = len(todo)
         error = None
+        interrupted: KeyboardInterrupt | None = None
         last_print = 0.0
         try:
             while remaining > 0:
@@ -277,8 +278,9 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
                 if on_progress and time.time() - last_print > 0.5:
                     on_progress(info)
                     last_print = time.time()
-        except KeyboardInterrupt:
+        except KeyboardInterrupt as e:
             error = "interrupted (finished chunks are kept; re-run the same command to resume)"
+            interrupted = e
         finally:
             for proc in procs:
                 if error:
@@ -287,6 +289,8 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
         if error:
             if log:
                 log.write("render_failed", error=error[:2000])
+            if interrupted is not None:  # re-raised after cleanup: Ctrl-C (exit 130) / a cancel, not a failure
+                raise interrupted
             raise RuntimeError(error)
     # concat
     lst = os.path.join(work_dir, "concat.txt")
