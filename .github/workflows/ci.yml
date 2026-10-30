@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libegl1 libgl1 libfontconfig1
       - run: pip install -r requirements.txt pytest
       - run: python -m pytest -q
       - name: Smoke test (preview)

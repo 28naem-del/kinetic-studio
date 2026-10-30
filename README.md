@@ -66,7 +66,7 @@ sound stay locked. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Install
 
-Requirements: Python 3.10+, and FFmpeg with libx264 (`ffmpeg` and `ffprobe` on PATH). Runs on
+Requirements: Python 3.10+, and FFmpeg with libx264 (`ffmpeg` and `ffprobe` on PATH). On minimal Linux also install `libegl1 libgl1` (needed by skia-python). Runs on
 Linux or macOS (Windows via WSL); 4 GB free RAM is recommended.
 
 ```bash
