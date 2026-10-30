@@ -93,9 +93,9 @@ For model readers: [`llms.txt`](llms.txt) and [`llms-full.txt`](llms-full.txt).
 - **Beat-locked timing**: lengths and times in beats and bars (`"4b"`, `"1/2b"`, `"bar3"`) or named
   markers with offsets (`"drop-2b"`); sections with energy 0-3 drive music layers and camera;
   `snap` puts seconds on the grid; tempo and downbeat are detected from your own music file.
-- **13 transitions** with beat-length windows and their own sounds: cut, flash, cross, dissolve,
-  whip, push, zoom, squash, wipe (rect, circle, diagonal, type), slice, split and `match`, which
-  hands a shared element from one scene to the next.
+- **13 transitions** with beat-length windows and their own sounds: cut, flash, cross, fade (an
+  alias of cross), dissolve, whip, push, zoom, squash, wipe (rect, circle, diagonal, type), slice,
+  split and `match`, which hands a shared element from one scene to the next.
 - **Film look**: 2.5D camera with parallax and continuity across cuts, a 12-column layout grid and
   type scale, linear-light motion blur, per-theme colour grade, bloom, vignette and grain.
 - **Sound**: five procedural music styles (`drive`, `calm`, `bright`, `pulse`, `lofi`) and 29
@@ -158,7 +158,7 @@ bin/kstudio doctor
 | `kstudio validate <spec>` | schema check and dry build; errors with JSON Pointer paths |
 | `kstudio brief "<brief>" [--mode M]` | prompt pack to turn a brief into a spec with any model |
 | `kstudio info <spec>` | resolved timeline and beat-grid lint |
-| `kstudio preview <spec> [--at T] [--preset P] [--scale S]` | stills and a contact sheet |
+| `kstudio preview <spec> [-o DIR] [--at T] [--preset P] [--scale S]` | stills and a contact sheet |
 | `kstudio render <spec> [-o OUT] [--preset P] [--fps N] [--quality draft\|standard\|high] [--4k] [--workers N] [--fresh] [--snap] [--no-audit]` | the final MP4 (parallel, resumable, audited) |
 | `kstudio audit <video> [--mode M]` | audit any finished video |
 | `kstudio mix <spec>` · `beats <audio>` · `sfx <dir>` | soundtrack only · tempo detection · export the sound kit |

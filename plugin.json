@@ -1,7 +1,7 @@
 {
   "name": "kinetic-studio",
   "displayName": "Kinetic Studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Brief -> beat-synced motion-graphics video. Kinetic teasers, explainers, app promos, data/crypto stories and karaoke quote clips with procedural music, -14 LUFS mix and automatic audit. Runs locally; no paid APIs.",
   "license": "MIT",
   "homepage": "https://github.com/28naem-del/kinetic-studio",
@@ -12,12 +12,11 @@
   "requirements": { "python": ">=3.10", "binaries": ["ffmpeg", "ffprobe"], "pip": "requirements.txt" },
   "commands": {
     "new": "bin/kstudio new <mode> <dir>",
-    "preview": "bin/kstudio preview <dir>",
+    "preview": "bin/kstudio preview <dir> [-o <out dir>]",
     "render": "bin/kstudio render <dir> --workers auto --preset reel",
     "audit": "bin/kstudio audit <video.mp4>"
   },
   "modes": ["kinetic", "explainer", "promo", "data", "social"],
-  "demos": ["demos/kinetic_teaser.mp4", "demos/explainer_cpu_cache.mp4", "demos/promo_app.mp4",
-            "demos/data_dashboard.mp4", "demos/social_quote.mp4"],
+  "demos": ["demos/kinetic.gif", "demos/explainer.gif", "demos/promo.gif", "demos/data.gif", "demos/social.gif"],
   "tags": ["agent-skill", "video", "motion-graphics", "reels", "tiktok", "shorts", "explainer", "promo", "data-viz", "kinetic-typography"]
 }
