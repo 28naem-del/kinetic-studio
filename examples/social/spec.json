@@ -1,26 +1,34 @@
-// Social clip, beat-locked at 86 BPM (one beat = 0.698 s, an 8th = 0.349 s).
-// Pull-quote revealed word by word on the 8ths (2 bars) -> hard cut on the bar line ->
-// karaoke captions, one sentence per bar, words on the 8ths (2 bars) -> hard cut ->
-// follow card that takes over the karaoke pill (1 bar). Risers end on each cut.
+// Social clip, beat-locked at 86 BPM (one beat = 0.698 s, an 8th = 0.349 s), 5 bars, 20 beats.
+// Every timing is in beats ("0b", "1/2b", "8b"); nothing is in seconds.
+// hook: four lines land one per beat (1 bar) -> 1/2-beat wipe up ->
+// quote card revealed word by word on the 8ths (2 bars), riser into ->
+// hard cut on the bar line -> karaoke captions, one sentence per bar, words on the 8ths, with
+// the speaker lower third (2 bars), ending on "stop." with a beat of air.
+// The "follow" end card (pill hand-off into a follow button) is available as a scene type;
+// the bundled example stays inside the 15 s example cap.
 {
   "mode": "social",
   "creator": { "name": "Kinetic Studio", "handle": "@kineticstudio", "series": "One idea a day", "initials": "KS" },
   "music": { "style": "lofi", "bpm": 86 },
   "markers": [
-    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
-    { "kind": "section", "at": "tip", "name": "groove", "energy": 2 },
-    { "kind": "section", "at": "cta", "name": "lift", "energy": 3 }
+    { "kind": "section", "at": "0b", "name": "intro", "energy": 1 },
+    { "kind": "section", "at": "tips", "name": "groove", "energy": 2 }
   ],
   "scenes": [
-    { "type": "quote", "id": "quote", "kicker": "On momentum",
-      "text": "Small steps every day beat big plans you never start.",
-      "emphasis": ["small", "steps"], "author": "Kinetic Studio", "role": "Notes on making things",
-      "stagger": "1/2b", "dur": "8b" },
-    { "type": "karaoke", "id": "tip", "kicker": "Tip of the day", "transition": { "kind": "cut", "on": "downbeat" },
-      "text": "Make the first two seconds count. Say one idea, show it big.",
-      "per": "1/2b", "emphasis": ["two", "seconds", "one", "big."], "dur": "8b" },
-    { "type": "follow", "id": "cta", "transition": { "kind": "cut", "on": "downbeat" },
-      "kicker": "Follow for more", "text": "One idea a day, cut to the beat.",
-      "button": "Follow", "done": "Following", "tap_at": "2b", "dur": "4b" }
+    { "type": "hook", "id": "hook", "kicker": "Short-form, rule one",
+      "lines": ["Two", "seconds.", "to earn the", "next ten."], "roles": ["display", "display", "title", "headline"],
+      "emphasis": ["seconds."], "first": "0b", "stagger": "1b", "dur": "4b" },
+    { "type": "quote", "id": "quote", "kicker": "Pull quote", "meta": "No. 014",
+      "transition": { "kind": "wipe", "shape": "rect", "dir": "up", "dur": "1/2b", "edge": "accent", "soft": 0 },
+      "text": "“Nobody remembers the clip that tried to say everything.”",
+      "emphasis": ["remembers", "everything.”"],
+      "speaker": { "name": "Mara Quinn", "role": "Short-form editor", "initials": "MQ" },
+      "first": "1/2b", "stagger": "1/2b", "dur": "8b" },
+    { "type": "karaoke", "id": "tips", "kicker": "Two rules, one bar each",
+      "transition": { "kind": "cut", "on": "downbeat" },
+      "text": "Make the first two seconds count. Cut on the beat, then stop.",
+      "per": "1/2b", "page_on": "bar", "emphasis": ["two", "seconds", "beat,", "stop."], "riser": false,
+      "speaker": { "name": "Mara Quinn", "role": "Short-form editor", "initials": "MQ" },
+      "dur": "8b" }
   ]
 }

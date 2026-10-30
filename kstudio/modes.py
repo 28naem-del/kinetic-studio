@@ -80,13 +80,14 @@ MODES: dict[str, dict[str, Any]] = {
         "audit": {"max_hold": 1.5, "min_motion": 0.7},
     },
     "social": {
-        "description": "Quote / social clip: karaoke captions with word highlight, quote cards.",
+        "description": "Social clip: hook opener, quote card, karaoke captions on the 8ths with a "
+                       "speaker lower third, follow end card. Paper ground, hard cuts on the beat.",
         "theme": "warm",
         "music": {"style": "lofi", "bpm": 86},
         "camera": {"push": 0.03, "roll": 0.0, "shake": 0.3, "bump": 0.006, "drift": 8, "drift_hz": 0.3,
                    "carry": "world", "ground_depth": 3.0},
-        "post": {"bloom": 0.25, "grain": 0.05, "vignette": 0.4, "chroma": 0.0},
-        "transition": "cross",
+        "post": {"bloom": 0.2, "grain": 0.05, "vignette": 0.3, "chroma": 0.0, "grade": "warm"},
+        "transition": "cut",
         "audit": {"max_hold": 2.0, "min_motion": 0.6},
     },
 }
