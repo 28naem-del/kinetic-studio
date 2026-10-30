@@ -9,7 +9,7 @@
 # wide, spatial-only denoise so the film grain does not repaint every frame (a temporal denoise would
 # ghost across cuts), 15 fps, a 64-colour palette from the changing pixels, Bayer dither (ordered, so
 # still areas stay still) and per-frame changed rectangles only. The five together stay under 8 MB.
-# Writes <out dir>/<mode>.gif (default: demos/ next to this script) and prints the sizes.
+# Writes <out dir>/<mode>.gif (default: demos/ next to this script) and prints their sizes in MiB.
 set -euo pipefail
 
 MASTERS="${1:?usage: scripts/make_gifs.sh <masters dir> [out dir]}"
@@ -48,4 +48,5 @@ for mode in kinetic explainer promo data social; do
     -filter_complex "[0:v]$pre,split[a][b];[a]$pal[p];[b][p]$use" -loop 0 "$OUT/$mode.gif"
 done
 
-du -ch "$OUT"/*.gif
+# byte sizes (du right after writing can report preallocated blocks, not the final size)
+wc -c "$OUT"/*.gif | awk '{printf "%9.2f MB  %s\n", $1 / 1048576, $2}'
