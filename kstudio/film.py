@@ -6,8 +6,9 @@ time t, which is what makes chunked, parallel, resumable rendering possible.
 from __future__ import annotations
 
 import copy
+import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
@@ -15,26 +16,20 @@ import skia
 
 from . import __version__
 from . import draw as D
-from . import ease as E
+from . import transitions as TR
+from .camera import link_shots
 from .modes import mode_defaults, resolve_theme
 from .scenes import Ctx, Scene, draw_ground, get_scene_class
+from .scenes.base import TIME_PARAMS, _snap_div
 from .scenes.common import draw_caption, draw_handle, draw_lower_third, draw_progress
 from .spec import SpecError, spec_hash
-from .timeline import TimeExprError, Timeline
+from .timeline import TimeExprError, Timeline, is_beat_expr
 
 RESERVED = {"type", "at", "dur", "transition", "transition_dur"}
 
-TRANSITIONS: dict[str, dict[str, Any]] = {
-    # name: default window (s), shutter multiplier inside the window, sound at the boundary
-    "cut": {"dur": 0.0, "shutter": 1.0, "sfx": None},
-    "flash": {"dur": 0.16, "shutter": 1.0, "sfx": "hit"},
-    "fade": {"dur": 0.45, "shutter": 1.0, "sfx": None},
-    "whip": {"dur": 0.26, "shutter": 3.0, "sfx": "whoosh"},
-    "push": {"dur": 0.4, "shutter": 2.0, "sfx": "swish"},
-    "zoom": {"dur": 0.34, "shutter": 2.5, "sfx": "whoosh"},
-    "squash": {"dur": 0.3, "shutter": 2.0, "sfx": "swish"},
-}
-DIRS = {"left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1)}
+TRANSITIONS = TR.TRANSITIONS
+DIRS = TR.DIRS
+GRID_TOL = 0.001          # seconds: a cut / scene edge counts as on the grid within 1 ms
 
 
 def _deep_merge(a: dict, b: dict) -> dict:
@@ -49,12 +44,22 @@ def _deep_merge(a: dict, b: dict) -> dict:
 
 @dataclass
 class Boundary:
-    t: float
+    t: float                      # the cut (incoming scene start), on the beat for beat-unit specs
     kind: str
     direction: tuple[int, int]
-    dur: float
+    dur: float                    # window length (s) = t1 - t0
     a: Scene
     b: Scene
+    params: dict[str, Any] = field(default_factory=dict)
+    t0: float | None = None       # window start (s)
+    t1: float | None = None       # window end (s)
+    beats: float = 0.0            # window length in beats
+
+    def __post_init__(self) -> None:
+        if self.t0 is None:
+            self.t0 = self.t - self.dur / 2
+        if self.t1 is None:
+            self.t1 = self.t0 + self.dur
 
 
 @lru_cache(maxsize=1)
@@ -78,8 +83,16 @@ class Film:
         self.W, self.H = width, height
         self.dir = spec.get("_dir", ".")
         mode = spec.get("mode", "kinetic")
-        self.cfg = _deep_merge(mode_defaults(mode), {k: spec[k] for k in ("music", "camera", "post", "audit", "transition")
-                                                     if k in spec})
+        self.cfg = _deep_merge(mode_defaults(mode), {k: spec[k] for k in ("music", "camera", "post", "audit", "transition",
+                                                                       "snap") if k in spec})
+        self.fps = float(spec.get("_fps") or spec.get("fps") or 30.0)
+        # snap: scene lengths/starts to whole beats, in-scene seconds and cue times to `snap_div`
+        self.snap_div = _snap_div(True if self.cfg.get("snap") is True else self.cfg.get("snap"))
+        if self.cfg.get("snap") is True:
+            self.cfg["snap"] = "16th"
+            self.snap_div = 4.0
+        self._captures: dict[tuple[int, float], dict[str, Any]] = {}
+        self._lint: list[dict[str, Any]] = []
         self.mode = mode
         theme_name = spec.get("theme", self.cfg["theme"])
         self.theme = resolve_theme(theme_name, spec.get("theme_overrides"))
@@ -107,6 +120,8 @@ class Film:
             t = self.tl.resolve(m.get("at", 0))
         except TimeExprError:
             return False
+        if self.snap_div and m.get("kind", "cue") in ("sfx", "hit") and not is_beat_expr(m.get("at", 0)):
+            t = self.tl.snap(t, self.snap_div)
         dur = self.tl.resolve_dur(m.get("dur", 0), t)
         kind = m.get("kind", "cue")
         if kind in ("source", "lower_third"):
@@ -135,23 +150,41 @@ class Film:
                 raise SpecError(f"scene #{i} has no type")
             cls = get_scene_class(sc["type"])
             start = self.tl.resolve(sc["at"]) if "at" in sc else cursor
+            kind, tparams = "cut", {}
+            if i:
+                try:
+                    kind, tparams = TR.parse(sc.get("transition", default_tr), sc.get("transition_dur"))
+                except KeyError:
+                    raise SpecError(f"unknown transition {sc.get('transition', default_tr)!r}; "
+                                    f"choose from {sorted(TRANSITIONS)}") from None
+            if self.snap_div:
+                if "at" in sc and not is_beat_expr(sc["at"]):
+                    start = self.tl.snap(start, 1.0)
+                on = str(tparams.get("on", ""))
+                if i and on in ("downbeat", "bar") and not self.tl.is_downbeat(start, GRID_TOL):
+                    start = self.tl.snap_bar(start, "ceil")
+                    if self.scenes:  # stretch the previous scene to the bar line
+                        prev = self.scenes[-1]
+                        prev.dur = start - prev.start
+                        pm = self.tl.named(prev.id)
+                        if pm is not None:
+                            pm.dur = prev.dur
             dur = self.tl.resolve_dur(sc.get("dur", 2.0), start)
+            if self.snap_div and not is_beat_expr(sc.get("dur", 2.0)):
+                dur = self.tl.snap_dur(dur, start, 1.0, min_units=1.0)
             if dur <= 0:
                 raise SpecError(f"scene #{i} ({sc['type']}) has non-positive duration")
             params = {k: v for k, v in sc.items() if k not in RESERVED}
             params.setdefault("id", f"s{i}_{sc['type']}")
             scene = cls(params, start, dur, self.tl, self.cfg)
             self.tl.add("cue", start, scene.id, dur, scene=sc["type"])
+            if i and kind == "match" and not (isinstance(sc.get("camera"), dict) and "carry" in sc["camera"]):
+                scene.cam["carry"] = "full"
             if self.scenes:
-                tr = str(sc.get("transition", default_tr))
-                kind, _, d = tr.partition("-")
-                if kind not in TRANSITIONS:
-                    raise SpecError(f"unknown transition {tr!r}; choose from {sorted(TRANSITIONS)}")
-                direction = DIRS.get(d or ("left" if i % 2 else "up"), (-1, 0))
-                tdur = float(sc.get("transition_dur", TRANSITIONS[kind]["dur"]))
-                self.boundaries.append(Boundary(start, kind, direction, tdur, self.scenes[-1], scene))
+                self.boundaries.append(self._boundary(i, kind, tparams, start, self.scenes[-1], scene))
             self.scenes.append(scene)
             cursor = start + dur
+        link_shots(self.scenes)
         self.duration = float(self.tl.resolve(sp["duration"])) if "duration" in sp else max(s.end for s in self.scenes)
         self.tl.duration = self.duration
         still = [m for m in pending if not self._try_marker(m)]
@@ -163,18 +196,86 @@ class Film:
         for sc in self.scenes:
             for cue in sc.cues():
                 t = sc.start + cue.at
+                if self.snap_div and cue.kind in ("sfx", "hit"):
+                    t = self.tl.snap(t, self.snap_div)
                 if t < -1e-6 or t > self.duration + 0.5:
                     continue
                 self.tl.add(cue.kind, max(0.0, t), cue.name, 0.0, **cue.data)
         for b in self.boundaries:
-            snd = TRANSITIONS[b.kind]["sfx"]
+            snd = b.params.get("sfx", TRANSITIONS[b.kind]["sfx"])
             if snd and b.b.p.get("transition_sfx", True):
-                lead = 0.18 if snd in ("whoosh", "swish") else 0.0
-                self.tl.add("sfx", max(0.0, b.t - lead), "", 0.0, sound=snd, gain=-3.0)
-            if b.kind in ("whip", "flash"):
-                self.tl.add("hit", b.t, "", 0.0, strength=0.35 if b.kind == "whip" else 0.6,
-                            flash=0.5 if b.kind == "flash" else 0.0)
+                # the sound's peak lands on the cut (the mixer offsets the clip start by its PEAK)
+                self.tl.add("sfx", b.t, "", 0.0, sound=snd, gain=-3.0, align="peak")
+            if b.kind == "whip":
+                self.tl.add("hit", b.t, "", 0.0, strength=0.35, flash=0.0)
+            elif b.kind == "flash":
+                self.tl.add("hit", b.t, "", 0.0, strength=0.6, flash=0.0)
         self.tl.generate_beats(self.duration)
+
+    def _boundary(self, i: int, kind: str, tparams: dict[str, Any], cut: float, a: Scene, b: Scene) -> Boundary:
+        """Window for a transition, sized in beats around the cut (anchor = fraction before it)."""
+        reg = TRANSITIONS[kind]
+        d = tparams.get("dur")
+        if kind == "match":
+            d = tparams.get("morph", "1/2b") if tparams.get("fit") else 0
+        if d is None:
+            beats = float(reg["beats"])
+        elif is_beat_expr(d):
+            beats = self.tl.beats_of(self.tl.resolve_dur(d, cut), cut)
+        else:  # seconds: quantise to 16ths so the window edges sit on the grid
+            beats = round(self.tl.beats_of(float(self.tl.resolve_dur(d, cut)), cut) * 4) / 4
+            if float(self.tl.resolve_dur(d, cut)) > 0 and beats == 0:
+                beats = 0.25
+        anchor = float(tparams.get("anchor", reg["anchor"]))
+        cb = self.tl.time_to_beat(cut)
+        t0 = self.tl.beat_to_time(cb - anchor * beats) if beats else cut
+        t1 = self.tl.beat_to_time(cb + (1 - anchor) * beats) if beats else cut
+        clipped = t0 < a.start - 1e-9 or t1 > b.end + 1e-9
+        t0, t1 = max(t0, a.start), min(t1, b.end)
+        dname = tparams.get("dir") or ("left" if i % 2 else "up")
+        direction = DIRS.get(str(dname), (-1, 0))
+        bd = Boundary(cut, kind, direction, max(t1 - t0, 0.0), a, b, params=tparams, t0=t0, t1=t1, beats=beats)
+        bd.clipped = clipped  # type: ignore[attr-defined]
+        return bd
+
+    # ------------------------------------------------------------------ lint
+    def lint(self) -> list[dict[str, Any]]:
+        """Pre-render grid check: off-beat scene lengths/starts/cuts and seconds-valued timings."""
+        out: list[dict[str, Any]] = []
+        tl = self.tl
+
+        def add(level: str, where: str, msg: str) -> None:
+            out.append({"level": level, "where": where, "msg": msg})
+
+        raw = self.spec.get("scenes", [])
+        for i, sc in enumerate(self.scenes):
+            where = f"scene #{i} {sc.id}"
+            nb = tl.beats_of(sc.dur, sc.start)
+            if abs(nb - round(nb)) * tl.spb > GRID_TOL:
+                add("warn", where, f"length {sc.dur:.3f}s = {nb:.2f} beats is not a whole number of beats "
+                    f"(write \"{max(1, round(nb))}b\" or set \"snap\": true)")
+            elif round(nb) not in (1, 2, 4, 8, 16, 3, 6, 12):
+                add("info", where, f"length {round(nb)} beats; 2/4/8 read as phrases")
+            if not tl.on_grid(sc.start, 1.0, GRID_TOL):
+                add("warn", where, f"starts {tl.grid_error(sc.start) * 1000:+.1f} ms off the beat")
+            src = raw[i] if i < len(raw) else {}
+            for k in TIME_PARAMS:
+                if k in src and not is_beat_expr(src[k]) and not isinstance(src[k], bool) and k not in sc.beat_params:
+                    add("info", where, f"{k}={src[k]!r} is in seconds; beat units (\"1/2b\") stay on the grid")
+            off = sorted({round(sc.start + c.at, 3) for c in sc.cues() if c.kind in ("sfx", "hit")
+                          and not tl.on_grid(sc.start + c.at, 2.0, 0.0334)})
+            if off:
+                add("info", where, f"{len(off)} scene cue(s) off the 8th grid at {off[:6]}s (scene code timing)")
+        for b in self.boundaries:
+            where = f"cut @{b.t:.3f}s {b.kind}"
+            if not tl.on_grid(b.t, 1.0, GRID_TOL):
+                add("warn", where, f"cut is {tl.grid_error(b.t) * 1000:+.1f} ms off the beat")
+            if str(b.params.get("on", "")) in ("downbeat", "bar") and not tl.is_downbeat(b.t, GRID_TOL):
+                add("warn", where, "cut asked for the downbeat but is not on a bar line")
+            if getattr(b, "clipped", False):
+                add("warn", where, "transition window clipped by a short neighbouring scene")
+        self._lint = out
+        return out
 
     # ------------------------------------------------------------------ query
     def fingerprint(self, extra: Any = None) -> str:
@@ -197,8 +298,8 @@ class Film:
 
     def boundary_at(self, t: float) -> tuple[Boundary, float] | None:
         for b in self.boundaries:
-            if b.dur > 0 and b.t - b.dur / 2 <= t < b.t + b.dur / 2:
-                return b, (t - (b.t - b.dur / 2)) / b.dur
+            if b.dur > 0 and b.t0 <= t < b.t1:  # type: ignore[operator]
+                return b, (t - b.t0) / b.dur  # type: ignore[operator]
         return None
 
     def shutter_mult(self, t: float) -> float:
@@ -210,87 +311,100 @@ class Film:
 
     # ------------------------------------------------------------------ draw
     def _ctx(self, c: skia.Canvas, t: float) -> Ctx:
-        return Ctx(c, self.W, self.H, self.pal, self.theme, self.tl, t, assets=self.dir)
+        return Ctx(c, self.W, self.H, self.pal, self.theme, self.tl, t, assets=self.dir, fps=self.fps, film=self)
 
     def _draw_scene(self, c: skia.Canvas, sc: Scene, t: float, lt_min: float | None = None,
-                    lt_max: float | None = None) -> None:
-        lt = t - sc.start
+                    lt_max: float | None = None, content_alpha: float = 1.0,
+                    content_offset: tuple[float, float, float] | None = None, ground: bool = True,
+                    capture: dict | None = None, clip: bool = False, lt_force: float | None = None) -> None:
+        lt = t - sc.start if lt_force is None else lt_force
         if lt_min is not None:
             lt = max(lt, lt_min)
         if lt_max is not None:
             lt = min(lt, lt_max)
         ctx = self._ctx(c, t)
-        ctx.lt, ctx.dur = lt, sc.dur
+        ctx.lt, ctx.dur, ctx.start, ctx.scene, ctx.capture = lt, sc.dur, sc.start, sc, capture
         c.save()
+        if clip:
+            c.clipRect(skia.Rect(0, 0, self.W, self.H))
         sc.camera(ctx)
-        draw_ground(ctx, sc.ground_at(lt), sc.ground_style)
-        sc.draw(ctx)
+        if ground:
+            gd = ctx.cam.ground_depth if ctx.cam is not None else 1.0
+            with ctx.layer(gd, world=True):
+                draw_ground(ctx, sc.ground_at(lt), sc.ground_style)
+        if content_alpha < 0.999 or content_offset is not None:
+            if content_alpha <= 0.002:
+                c.restore()
+                return
+            if content_alpha < 0.999:
+                c.saveLayerAlpha(None, int(round(255 * content_alpha)))
+            else:
+                c.save()
+            if content_offset is not None:
+                dx, dy, k = content_offset
+                c.translate(self.W / 2 + dx, self.H / 2 + dy); c.scale(k, k); c.translate(-self.W / 2, -self.H / 2)
+            sc.draw(ctx)
+            c.restore()
+        else:
+            sc.draw(ctx)
         c.restore()
 
     def draw(self, c: skia.Canvas, t: float) -> None:
-        W, H = self.W, self.H
         bt = self.boundary_at(t)
         if bt is None:
             self._draw_scene(c, self.scene_at(t), t)
         else:
             b, p = bt
-            a_max = b.a.dur + b.dur / 2
-            k = b.kind
-            if k == "fade":
-                self._draw_scene(c, b.a, t, lt_max=a_max)
-                c.saveLayerAlpha(None, int(255 * E.in_out_quad(p)))
-                self._draw_scene(c, b.b, t, lt_min=0.0)
-                c.restore()
-            elif k == "flash":
-                self._draw_scene(c, b.a if p < 0.5 else b.b, t, lt_min=0.0, lt_max=a_max)
-                c.drawRect(skia.Rect(0, 0, W, H), D.paint(self.pal("paper", 1 - abs(2 * p - 1))))
-            elif k in ("whip", "push"):
-                e = E.in_out_expo(p) if k == "whip" else E.in_out_cubic(p)
-                dx, dy = b.direction
-                c.save(); c.translate(dx * W * e, dy * H * e)
-                if k == "push":
-                    sc_ = 1 - 0.08 * e
-                    c.translate(W / 2, H / 2); c.scale(sc_, sc_); c.translate(-W / 2, -H / 2)
-                self._draw_scene(c, b.a, t, lt_max=a_max)
-                c.restore()
-                c.save(); c.translate(-dx * W * (1 - e), -dy * H * (1 - e))
-                self._draw_scene(c, b.b, t, lt_min=0.0)
-                c.restore()
-            elif k == "zoom":
-                if p < 0.5:
-                    u = E.in_cubic(p * 2)
-                    c.save(); c.translate(W / 2, H / 2); c.scale(1 + 0.9 * u, 1 + 0.9 * u); c.translate(-W / 2, -H / 2)
-                    self._draw_scene(c, b.a, t, lt_max=a_max)
-                    c.restore()
-                    c.drawRect(skia.Rect(0, 0, W, H), D.paint(self.pal("bg", u)))
-                else:
-                    u = E.out_cubic((p - 0.5) * 2)
-                    sc_ = 0.6 + 0.4 * u
-                    self._ground_only(c, b.b, t)
-                    c.save(); c.translate(W / 2, H / 2); c.scale(sc_, sc_); c.translate(-W / 2, -H / 2)
-                    c.saveLayerAlpha(None, int(255 * u))
-                    self._draw_scene(c, b.b, t, lt_min=0.0)
-                    c.restore(); c.restore()
-            elif k == "squash":
-                if p < 0.5:
-                    u = E.in_cubic(p * 2)
-                    self._ground_only(c, b.b, t)
-                    c.save(); c.translate(W / 2, H / 2); c.scale(1 + 0.2 * u, max(1 - u, 0.001)); c.translate(-W / 2, -H / 2)
-                    self._draw_scene(c, b.a, t, lt_max=a_max)
-                    c.restore()
-                else:
-                    u = E.out_back((p - 0.5) * 2)
-                    self._ground_only(c, b.a, t)
-                    c.save(); c.translate(W / 2, H / 2); c.scale(1.2 - 0.2 * u, max(u, 0.001)); c.translate(-W / 2, -H / 2)
-                    self._draw_scene(c, b.b, t, lt_min=0.0)
-                    c.restore()
-            else:
-                self._draw_scene(c, self.scene_at(t), t)
+            TR.draw_boundary(self, c, b, p, t)
         self._overlays(c, t)
 
     def _ground_only(self, c: skia.Canvas, sc: Scene, t: float) -> None:
         ctx = self._ctx(c, t)
         draw_ground(ctx, "bg", sc.ground_style)
+
+    # ------------------------------------------------------------------ match cuts
+    def capture(self, sc: Scene, t: float) -> dict[str, Any]:
+        """Rects published by scene `sc` when drawn at film time t (screen space, cached)."""
+        key = (id(sc), round(t, 6))
+        if key not in self._captures:
+            self._captures[key] = {}
+            rec = skia.PictureRecorder()
+            cv = rec.beginRecording(skia.Rect(0, 0, self.W, self.H))
+            got: dict[str, Any] = {}
+            self._draw_scene(cv, sc, t, lt_min=0.0, lt_max=sc.dur, capture=got)
+            rec.finishRecordingAsPicture()
+            self._captures[key] = got
+        return self._captures[key]
+
+    def _incoming(self, sc: Scene) -> Boundary | None:
+        for b in self.boundaries:
+            if b.b is sc:
+                return b
+        return None
+
+    def handoff_source(self, sc: Scene, name: str) -> dict[str, Any] | None:
+        """The previous scene's published element `name` at the cut into `sc` (None if absent)."""
+        b = self._incoming(sc)
+        if b is None or not (b.kind in TR.HANDOFF_KINDS or b.params.get("handoff")):
+            return None
+        if b.params.get("element") and b.params.get("element") != name and not b.params.get("any_element"):
+            return None
+        return self.capture(b.a, b.t - 1e-4).get(name)
+
+    def match_matrix(self, b: Boundary, u: float) -> skia.Matrix | None:
+        """Whole-scene fit for a match cut: maps the incoming element onto the outgoing one at u = 0."""
+        ca = self.capture(b.a, b.t - 1e-4)
+        cb = self.capture(b.b, b.b.start)
+        name = b.params.get("element") or next((k for k in cb if k in ca), None)
+        if not name or name not in ca or name not in cb:
+            return None
+        ra, rb = ca[name]["rect"], cb[name]["rect"]
+        k0 = math.sqrt(max(ra.width() * ra.height(), 1.0) / max(rb.width() * rb.height(), 1.0))
+        k = k0 ** (1 - u)
+        ax, ay, bx, by = ra.centerX(), ra.centerY(), rb.centerX(), rb.centerY()
+        m = skia.Matrix.Translate(bx + (ax - bx) * (1 - u), by + (ay - by) * (1 - u))
+        m = skia.Matrix.Concat(m, skia.Matrix.Scale(k, k))
+        return skia.Matrix.Concat(m, skia.Matrix.Translate(-bx, -by))
 
     def _overlays(self, c: skia.Canvas, t: float) -> None:
         ctx = self._ctx(c, t)
@@ -307,17 +421,23 @@ class Film:
             draw_handle(ctx, self.handle)
         if self.show_progress:
             draw_progress(ctx, t / max(self.duration, 1e-3))
+        # flashes: at most 2 frames, accent-tinted at 60-80 % (never a paper/white frame)
         fl = 0.0
+        for b in self.boundaries:
+            if b.kind == "flash" or b.params.get("flash"):
+                fl = max(fl, TR.flash_alpha(b.t, t, self.fps))
         for m in self.tl.of("hit"):
             f = float(m.data.get("flash", 0.0))
-            if f and 0 <= t - m.t < 0.4:
-                fl += f * E.clamp(1 - (t - m.t) / 0.25) ** 2
+            if f > 0 and -0.1 <= t - m.t < 0.1:
+                fl = max(fl, TR.flash_alpha(m.t, t, self.fps, 2 if f >= 0.3 else 1))
         if fl > 0.002:
-            c.drawRect(skia.Rect(0, 0, self.W, self.H), D.paint(self.pal("paper", min(fl, 1.0))))
+            c.drawRect(skia.Rect(0, 0, self.W, self.H), D.paint(self.pal(self.theme.get("flash", "accent"), fl)))
 
     # ------------------------------------------------------------------ info
     def summary(self) -> dict[str, Any]:
         return {"mode": self.mode, "duration": round(self.duration, 3), "size": [self.W, self.H],
                 "scenes": [{"id": s.id, "type": s.type, "start": round(s.start, 3), "dur": round(s.dur, 3)} for s in self.scenes],
-                "transitions": [{"t": round(b.t, 3), "kind": b.kind, "dur": b.dur} for b in self.boundaries],
+                "transitions": [{"t": round(b.t, 3), "kind": b.kind, "dur": round(b.dur, 4), "beats": round(b.beats, 3),
+                                 "window": [round(b.t0, 4), round(b.t1, 4)],  # type: ignore[arg-type]
+                                 "beat": round(self.tl.time_to_beat(b.t), 3)} for b in self.boundaries],
                 "timeline": self.tl.summary()}

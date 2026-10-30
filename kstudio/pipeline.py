@@ -33,7 +33,9 @@ def beat_grid_for(spec: dict[str, Any]) -> BeatGrid | None:
 def build(spec: dict[str, Any], out_path: str, preset: str = "reel", fps: int = 30, quality: str = "standard",
           k4: bool = False, workers: str | int = "auto", fresh: bool = False, do_audit: bool = True,
           chunk_seconds: float = 2.0, on_progress: Callable[[dict], None] | None = None,
-          say: Callable[[str], None] = print) -> dict[str, Any]:
+          say: Callable[[str], None] = print, snap: bool | str | None = None) -> dict[str, Any]:
+    """Render a spec. ``snap`` (True/"beat"/"8th"/"16th"/"bar") turns on beat auto-snap for scene
+    lengths, starts and seconds-valued timings; off-grid scenes are reported by the pre-render lint."""
     which_ffmpeg()
     t_start = time.time()
     started = datetime.now().astimezone()
@@ -50,7 +52,17 @@ def build(spec: dict[str, Any], out_path: str, preset: str = "reel", fps: int = 
     if grid:
         say(f"beat grid from music file: {grid.bpm:.2f} BPM, offset {grid.offset:.3f}s, confidence {grid.confidence:.2f}")
         log.write("beats", **grid.as_dict())
+    spec = dict(spec)
+    spec["_fps"] = out.fps  # transition flashes and windows are sized in frames of the output rate
+    if snap:
+        spec["snap"] = snap
     film = Film(spec, out.width, out.height, beat_grid=grid)
+    lint = film.lint()
+    for w in lint:
+        if w["level"] == "warn":
+            say(f"lint: {w['where']}: {w['msg']}")
+    if lint:
+        log.write("lint", items=lint)
     n_frames = int(round(film.duration * out.fps))
     chunks = -(-n_frames // int(chunk_seconds * out.fps))
     if workers == "auto":
@@ -84,6 +96,7 @@ def build(spec: dict[str, Any], out_path: str, preset: str = "reel", fps: int = 
         "audio_seconds": round(audio_s, 2), "total_seconds": round(total, 2),
         "started": started.isoformat(timespec="seconds"), "finished": finished.isoformat(timespec="seconds"),
         "audio": {k: v for k, v in am.items() if k != "sfx"}, "timeline": film.summary(),
+        "lint": lint,
     }
     if do_audit:
         th = dict(film.cfg.get("audit", {}))
