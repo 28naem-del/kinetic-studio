@@ -1,0 +1,11 @@
+// Banner for the README, rendered with the engine itself:
+//   bin/kstudio preview docs/media/hero --preset landscape --at 1.6
+{
+  "mode": "kinetic",
+  "handle": "",
+  "music": { "style": "drive", "bpm": 128 },
+  "scenes": [
+    { "type": "logo", "text": "KINETIC STUDIO", "tagline": "Brief → beat-synced motion graphics. Fully local. No credits.",
+      "url": "github.com/28naem-del/kinetic-studio", "dur": 3.0 }
+  ]
+}

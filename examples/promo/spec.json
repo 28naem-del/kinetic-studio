@@ -1,0 +1,29 @@
+// Product / app promo: device mockup with callouts, feature grid, CTA with a tap, logo sting.
+// Put a real screenshot at "screen": "screen.png" (9:19.5 portrait) or leave it out for the procedural UI.
+{
+  "mode": "promo",
+  "music": { "style": "bright", "bpm": 112 },
+  "markers": [
+    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
+    { "kind": "section", "at": "features", "name": "body", "energy": 2 },
+    { "kind": "section", "at": "cta", "name": "lift", "energy": 3 }
+  ],
+  "scenes": [
+    { "type": "device", "id": "hero", "headline": "Meet Flowly", "sub": "Your day, in focus",
+      "ui": { "title": "Today", "accent": "accent" },
+      "callouts": [
+        { "text": "Smart focus timer", "icon": "clock", "side": "left" },
+        { "text": "Streaks that stick", "icon": "spark", "side": "right" },
+        { "text": "Private by design", "icon": "lock", "side": "left" }
+      ], "scroll": 0.4, "dur": 4.3 },
+    { "type": "features", "id": "features", "heading": "Built for deep work",
+      "items": [
+        { "icon": "bolt", "title": "Instant", "text": "Start a session in one tap" },
+        { "icon": "chart", "title": "Insights", "text": "See where your hours go" },
+        { "icon": "bell", "title": "Gentle", "text": "Nudges, never nags" },
+        { "icon": "shield", "title": "Private", "text": "Your data stays yours" }
+      ], "dur": 2.7 },
+    { "type": "cta", "id": "cta", "headline": "Start free today", "button": "Get Flowly", "sub": "iOS · Android · Web", "dur": 2.4 },
+    { "type": "logo", "text": "flowly", "tagline": "focus, beautifully", "url": "flowly.app", "dur": 2.4, "transition": "zoom" }
+  ]
+}

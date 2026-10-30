@@ -1,0 +1,17 @@
+// Social / quote clip: pull-quote card, then karaoke captions with an active-word pill.
+{
+  "mode": "social",
+  "handle": "@kineticstudio",
+  "music": { "style": "lofi", "bpm": 86 },
+  "markers": [
+    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
+    { "kind": "section", "at": "tip", "name": "groove", "energy": 2 }
+  ],
+  "scenes": [
+    { "type": "quote", "text": "Small steps every day beat big plans you never start.", "author": "Kinetic Studio",
+      "role": "demo quote", "dur": 4.0 },
+    { "type": "karaoke", "id": "tip", "kicker": "TIP OF THE DAY",
+      "text": "Make the first two seconds count. Say one idea, show it big, and let the beat carry the rest.",
+      "per": 0.32, "emphasis": ["one", "big", "beat"], "dur": 7.0 }
+  ]
+}

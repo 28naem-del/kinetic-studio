@@ -1,0 +1,21 @@
+// Kinetic type teaser: one idea per beat. Times like "3b" are beats at the music BPM.
+{
+  "mode": "kinetic",
+  "handle": "@kineticstudio",
+  "music": { "style": "drive", "bpm": 128 },
+  "markers": [
+    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
+    { "kind": "section", "at": "build", "name": "build", "energy": 2 },
+    { "kind": "section", "at": "drop", "name": "drop", "energy": 3 },
+    { "kind": "sfx", "at": "drop-2b", "sound": "riser_short", "gain": 2 }
+  ],
+  "scenes": [
+    { "type": "slam", "id": "open", "words": ["STOP", "SCROLLING", "NOW"], "dur": "3b", "accent_words": ["NOW"] },
+    { "type": "stack", "lines": ["ONE IDEA", "PER", "BEAT"], "dur": "4b" },
+    { "type": "marquee", "id": "build", "text": "MOTION", "dur": "4b", "transition": "zoom" },
+    { "type": "type3d", "text": "KINETIC", "dur": "4b" },
+    { "type": "scramble", "text": "KINETIC", "label": "STUDIO", "dur": "4b", "transition": "flash" },
+    { "type": "countdown", "from": 3, "dur": "3b", "transition": "squash" },
+    { "type": "burst", "id": "drop", "text": "GO", "dur": "4b", "transition": "flash" }
+  ]
+}

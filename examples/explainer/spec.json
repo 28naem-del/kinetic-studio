@@ -1,0 +1,36 @@
+// Explainer / education: calm pacing, labelled diagram, citation lower-third, summary end card.
+{
+  "mode": "explainer",
+  "handle": "@kineticstudio",
+  "progress": true,
+  "music": { "style": "calm", "bpm": 84 },
+  "markers": [
+    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
+    { "kind": "section", "at": "hierarchy", "name": "body", "energy": 2 },
+    { "kind": "section", "at": "outro", "name": "outro", "energy": 0 }
+  ],
+  "sources": [
+    { "at": "hierarchy+0.8", "dur": 2.3, "tag": "Source",
+      "text": "Hennessy & Patterson, Computer Architecture, 6th ed." }
+  ],
+  "scenes": [
+    { "type": "title", "kicker": "HARDWARE 101", "title": "How does a\nCPU cache work?", "subtitle": "A 15-second primer", "dur": 2.2 },
+    { "type": "definition", "term": "Cache", "phonetic": "/kash/", "pos": "noun · hardware",
+      "definition": "A small, very fast memory next to the CPU that keeps copies of recently used data.",
+      "note": "Hits are fast; misses go to RAM", "dur": 2.6 },
+    { "type": "diagram", "id": "hierarchy", "kicker": "MEMORY HIERARCHY", "heading": "Closer is faster",
+      "nodes": [
+        { "id": "C", "label": "CPU", "sub": "Registers" },
+        { "id": "L1", "label": "L1", "sub": "~1 ns" },
+        { "id": "L2", "label": "L2", "sub": "~4 ns" },
+        { "id": "R", "label": "RAM", "sub": "~80 ns" }
+      ],
+      "callouts": [ { "node": "L1", "text": "smallest", "side": "up" }, { "node": "R", "text": "largest", "side": "up" } ],
+      "caption": "Each level is bigger and slower", "stagger": 0.4, "dur": 4.0 },
+    { "type": "bullets", "id": "why", "kicker": "WHY IT WORKS", "heading": "Locality",
+      "items": ["Reused data stays close", "Neighbours load together", "Misses fetch a whole line"],
+      "stagger": 0.7, "dur": 3.0 },
+    { "type": "end_card", "id": "outro", "icon": "book", "title": "Keep data close.", "body": "Fast code is cache-friendly code.",
+      "small": "Approximate latencies · typical desktop CPU", "handle": "@kineticstudio", "dur": 2.6 }
+  ]
+}
