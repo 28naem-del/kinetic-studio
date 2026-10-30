@@ -140,6 +140,30 @@ def test_encoder_vbv_flags_stay_under_maxrate():
     assert "vbv-init=" in cmd[cmd.index("-x264-params") + 1]
 
 
+def test_encoder_is_bit_exact_and_machine_independent(tmp_path):
+    """Multi-threaded x264 under a tight VBV depends on thread timing; the chunk encoder must run
+    one x264 thread so the same frames always give the same bitstream."""
+    import hashlib
+    import shutil
+    import subprocess
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not on PATH")
+    out = make_output("reel", 30, "standard", scale=0.5)
+    cmd = RD.encoder_cmd(out, "x.ts")
+    assert RD.ENCODER_THREADS == 1 and cmd[cmd.index("-threads") + 1] == "1"
+    rng = np.random.default_rng(7)  # noisy, moving frames: the VBV is under pressure on every frame
+    base = rng.integers(0, 256, (out.height, out.width, 3), dtype=np.uint8)
+    raw = b"".join(np.roll(base, 9 * i, axis=1).tobytes() for i in range(36))
+    digests = []
+    for r in range(3):
+        p = str(tmp_path / f"c{r}.ts")
+        subprocess.run(RD.encoder_cmd(out, p), input=raw, check=True)
+        dec = subprocess.run(["ffmpeg", "-v", "error", "-i", p, "-f", "rawvideo", "-"],
+                             capture_output=True, check=True).stdout
+        digests.append(hashlib.md5(dec).hexdigest())
+    assert len(set(digests)) == 1, digests
+
+
 # ---------------------------------------------------------------- end card
 @pytest.mark.parametrize("theme", sorted(THEMES))
 def test_end_card_handle_and_cta_contrast(theme):

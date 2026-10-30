@@ -48,8 +48,16 @@ VBV_RATE = 0.95      # x264 -maxrate as a fraction of Output.maxrate_kbps
 VBV_BUFFER_S = 0.5   # -bufsize in seconds of the nominal maxrate
 VBV_INIT = 0.3       # initial buffer fill of each chunk
 
+# Determinism. With more than one x264 thread (frame threads or sliced threads alike), the VBV
+# rate control reads the predicted size of rows and frames that other threads are still encoding,
+# so with a buffer this tight the bitstream depends on thread timing: 3 encodes of one raw chunk
+# gave 3 different streams. One x264 thread per chunk is bit-exact run to run and machine to
+# machine; the chunk workers already run in parallel, and a single-threaded x264 encodes a
+# 1080x1920 frame faster than the compositor draws one, so the pipe rarely waits on it.
+ENCODER_THREADS = 1
 
-def encoder_cmd(out: Output, path: str, threads: int = 2) -> list[str]:
+
+def encoder_cmd(out: Output, path: str, threads: int = ENCODER_THREADS) -> list[str]:
     rate = int(out.maxrate_kbps * VBV_RATE)
     buf = int(out.maxrate_kbps * VBV_BUFFER_S)
     return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -108,41 +116,60 @@ def _worker(wid: int, spec: dict, out_d: dict, grid: dict | None, post: dict | N
         bg = BeatGrid(**grid) if grid else None
         film = Film(spec, out.width, out.height, beat_grid=bg)
         comp = Compositor(film, out, post)
-        threads = max(1, min(4, (os.cpu_count() or 2) // max(1, int(os.environ.get("KSTUDIO_WORKERS", "1")))))
     except Exception as e:  # noqa: BLE001
         import traceback
         results.put({"type": "error", "worker": wid, "error": f"{e}\n{traceback.format_exc()}"})
         return
+
+    def finish(enc: tuple) -> None:
+        proc, k, a, b, part, final, t0, stats = enc
+        err = proc.stderr.read().decode(errors="replace")
+        rc = proc.wait()
+        if rc != 0:
+            raise RuntimeError(f"ffmpeg exited {rc}: {err[-800:]}")
+        got = ffprobe_frames(part)
+        if got != b - a:
+            raise RuntimeError(f"chunk {k}: expected {b - a} frames, encoder wrote {got}")
+        os.replace(part, final)
+        results.put({"type": "chunk_done", "worker": wid, "chunk": k, "frames": b - a,
+                     "seconds": round(time.time() - t0, 3), "stats": stats})
+
+    # The single-threaded encoder (ENCODER_THREADS) still holds its lookahead when the last frame
+    # of a chunk is piped in; it drains while this worker draws the next chunk, and is finished
+    # (checked, renamed, reported) only then, so the drain never stalls the worker.
+    pending: tuple | None = None
     while True:
         try:
             job = tasks.get(timeout=0.5)
         except queue.Empty:
             continue
-        if job is None:
-            break
-        k, a, b = job
-        final = os.path.join(work_dir, f"chunk_{k:04d}.ts")
-        part = final + ".partial"
-        t0 = time.time()
-        proc = subprocess.Popen(encoder_cmd(out, part, threads), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        k = None
+        proc = None
         try:
+            if job is None:
+                if pending:
+                    k = pending[1]
+                    finish(pending)
+                    pending = None
+                break
+            k, a, b = job
+            final = os.path.join(work_dir, f"chunk_{k:04d}.ts")
+            part = final + ".partial"
+            t0 = time.time()
+            proc = subprocess.Popen(encoder_cmd(out, part), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
             for i in range(a, b):
                 proc.stdin.write(comp.frame(i).tobytes())  # type: ignore[union-attr]
                 if (i - a) % 6 == 5 or i == b - 1:
                     results.put({"type": "progress", "worker": wid, "chunk": k, "frame": i})
             proc.stdin.close()  # type: ignore[union-attr]
-            err = proc.stderr.read().decode(errors="replace")  # type: ignore[union-attr]
-            rc = proc.wait()
-            if rc != 0:
-                raise RuntimeError(f"ffmpeg exited {rc}: {err[-800:]}")
-            got = ffprobe_frames(part)
-            if got != b - a:
-                raise RuntimeError(f"chunk {k}: expected {b - a} frames, encoder wrote {got}")
-            os.replace(part, final)
-            results.put({"type": "chunk_done", "worker": wid, "chunk": k, "frames": b - a,
-                         "seconds": round(time.time() - t0, 3), "stats": dict(comp.stats)})
+            if pending:
+                k = pending[1]
+                finish(pending)
+            pending = (proc, job[0], a, b, part, final, t0, dict(comp.stats))
         except Exception as e:  # noqa: BLE001
-            proc.kill()
+            for enc in (proc, pending[0] if pending else None):
+                if enc is not None:
+                    enc.kill()
             import traceback
             results.put({"type": "error", "worker": wid, "chunk": k, "error": f"{e}\n{traceback.format_exc()}"})
             break

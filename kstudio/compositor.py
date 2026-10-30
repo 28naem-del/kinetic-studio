@@ -26,7 +26,9 @@ Motion blur (``frame_linear``)
 
     Flashes (``film.flash_at``) are applied once per delivered frame, after the blur, so a 2-frame
     flash is exactly 2 frames at every shutter. Grain and dither are re-seeded per frame from
-    (frame index, spec hash): two renders of the same spec are bit-identical.
+    (frame index, spec hash), so the frames of a spec are bit-identical across runs, processes and
+    thread counts; ``render.encoder_cmd`` keeps the delivered stream bit-identical too (one x264
+    thread per chunk, see ``render.ENCODER_THREADS``).
 
 Post chain (``_post_linear``, float32)
     linear:  bloom (soft-knee threshold in linear light, two octaves, halation tint)
@@ -69,7 +71,7 @@ def _theme_name(film: Film) -> str | None:
 
 def spec_seed(film: Film) -> int:
     """32-bit seed from the film's spec (private "_" keys excluded): grain and sample jitter are
-    a function of (frame index, spec), so every render of a spec is bit-identical."""
+    a function of (frame index, spec), so every render of a spec draws bit-identical frames."""
     from .spec import spec_hash
     return int(spec_hash(getattr(film, "spec", {}) or {})[:8], 16)
 
