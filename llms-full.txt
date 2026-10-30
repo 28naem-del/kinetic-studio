@@ -14,6 +14,7 @@ Agents use it through an MCP server (stdio or streamable HTTP), function-calling
 - [Agent skill](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/SKILL.md): workflow, beat units, the spec contract, error codes, per-mode writing rules and troubleshooting
 - [Scene reference](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/SCENES.md): all 31 scene types with parameters and defaults, shared keys, transitions
 - [Command line](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/CLI.md): commands, --json output shapes, exit codes
+- [Footage and swap](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/SWAP.md): the `clip` scene (your video under titles, any mode) and the optional ComfyUI character swap (`kstudio swap`, exit 7 without a backend)
 - [Architecture](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/ARCHITECTURE.md): modules and the render, audio and audit pipeline
 - [README](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/README.md): overview, install, command line, demos
 
@@ -72,8 +73,9 @@ file. Same spec, same video: renders are deterministic and resumable.
 - Anything that should cut on the beat of the music.
 
 Not for: generating live-action footage, faces or voices, lip-sync or text-to-speech. A user's own
-photo can go in an `image` scene; real footage is composited afterwards. The engine does not write
-copy: you write the words from the brief.
+photo can go in an `image` scene and their own video in a `clip` scene (any mode: trimmed on the
+beat, with titles, captions or counters drawn over it in `over`). The engine does not write copy:
+you write the words from the brief.
 
 ## 30-second path
 
@@ -253,7 +255,12 @@ Presets: `reel` / `story` 1080x1920, `landscape` / `youtube` 1920x1080, `square`
 
 - A 15-second 1080x1920 / 30 fps reel at `standard` takes about 1-3 minutes on a 10-core laptop
   (4-13x the video length; more on a busy machine). `draft` is faster; use `preview` while iterating.
-- Pure 2D/2.5D motion graphics: no footage generation, no lip-sync, no voice-over.
+- Pure 2D/2.5D motion graphics: no footage generation, no lip-sync, no voice-over. Footage you
+  supply plays in a `clip` scene.
+- Optional character swap: `kstudio swap` / the MCP tool `swap` / a clip's `source.swap` send a video
+  and a character image to a ComfyUI server you run on an NVIDIA GPU with Openjutsu's workflows
+  (`KSTUDIO_COMFY_URL`). Without one they return `BACKEND_UNREACHABLE` (exit 7) and a clip plays the
+  input video. Nothing else needs it. See `docs/SWAP.md`.
 - Do not post or upload results anywhere without the user's explicit approval.
 
 ---
@@ -381,7 +388,7 @@ the engine. Raise the client's startup and tool timeouts where the quickstart sa
 
 # Scene reference
 
-31 scene types. Any scene works in any mode; the mode only sets theme, music, camera feel,
+32 scene types. Any scene works in any mode; the mode only sets theme, music, camera feel,
 default transition and audit thresholds. The same information is live from the `list_scenes` MCP tool
 and `kstudio scenes -v`; the full JSON Schema comes from `get_schema`. Regenerate this page with
 `python docs/tools/generate.py --scenes`.
@@ -1002,6 +1009,34 @@ Editorial title card: tracked kicker on the shared top anchor, a balanced headli
 | `weight` | `null` |
 | `accent_line` | `-1` |
 | `sfx` | `"swish"` |
+
+## Footage (any mode)
+
+### `clip`
+
+Footage from a local video file: trim with `in`/`out` (seconds or beats, snapped with the grid), `fit` cover (with a `focus` point and a slow `zoom`) or contain, an optional `grade`, `blur` and `opacity`, a `scrim` that keeps type legible, an optional picture-in-picture `box`, and `over`: a list of scenes (title, callout, karaoke, counter ...) drawn on top of the footage. `end` = hold (freeze the last frame) or loop. `source` = {"swap": {...}} plays footage from the optional swap backend (see docs/SWAP.md) and falls back to the input video without it.
+
+| key | default |
+|---|---|
+| `src` | `""` |
+| `source` | `null` |
+| `in` | `0.0` |
+| `out` | `null` |
+| `speed` | `1.0` |
+| `end` | `"hold"` |
+| `fit` | `"cover"` |
+| `focus` | `[0.5, 0.5]` |
+| `zoom` | `[1.0, 1.06]` |
+| `ease` | `"move"` |
+| `opacity` | `1.0` |
+| `grade` | `null` |
+| `blur` | `0.0` |
+| `scrim` | `0.45` |
+| `box` | `null` |
+| `radius` | `24` |
+| `backdrop` | `"blur"` |
+| `sfx` | `null` |
+| `over` | `[]` |
 
 ---
 

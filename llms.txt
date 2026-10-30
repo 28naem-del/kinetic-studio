@@ -14,6 +14,7 @@ Agents use it through an MCP server (stdio or streamable HTTP), function-calling
 - [Agent skill](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/SKILL.md): workflow, beat units, the spec contract, error codes, per-mode writing rules and troubleshooting
 - [Scene reference](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/SCENES.md): all 31 scene types with parameters and defaults, shared keys, transitions
 - [Command line](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/CLI.md): commands, --json output shapes, exit codes
+- [Footage and swap](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/SWAP.md): the `clip` scene (your video under titles, any mode) and the optional ComfyUI character swap (`kstudio swap`, exit 7 without a backend)
 - [Architecture](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/ARCHITECTURE.md): modules and the render, audio and audit pipeline
 - [README](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/README.md): overview, install, command line, demos
 

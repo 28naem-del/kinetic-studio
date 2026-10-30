@@ -22,8 +22,9 @@ file. Same spec, same video: renders are deterministic and resumable.
 - Anything that should cut on the beat of the music.
 
 Not for: generating live-action footage, faces or voices, lip-sync or text-to-speech. A user's own
-photo can go in an `image` scene; real footage is composited afterwards. The engine does not write
-copy: you write the words from the brief.
+photo can go in an `image` scene and their own video in a `clip` scene (any mode: trimmed on the
+beat, with titles, captions or counters drawn over it in `over`). The engine does not write copy:
+you write the words from the brief.
 
 ## 30-second path
 
@@ -203,5 +204,10 @@ Presets: `reel` / `story` 1080x1920, `landscape` / `youtube` 1920x1080, `square`
 
 - A 15-second 1080x1920 / 30 fps reel at `standard` takes about 1-3 minutes on a 10-core laptop
   (4-13x the video length; more on a busy machine). `draft` is faster; use `preview` while iterating.
-- Pure 2D/2.5D motion graphics: no footage generation, no lip-sync, no voice-over.
+- Pure 2D/2.5D motion graphics: no footage generation, no lip-sync, no voice-over. Footage you
+  supply plays in a `clip` scene.
+- Optional character swap: `kstudio swap` / the MCP tool `swap` / a clip's `source.swap` send a video
+  and a character image to a ComfyUI server you run on an NVIDIA GPU with Openjutsu's workflows
+  (`KSTUDIO_COMFY_URL`). Without one they return `BACKEND_UNREACHABLE` (exit 7) and a clip plays the
+  input video. Nothing else needs it. See `docs/SWAP.md`.
 - Do not post or upload results anywhere without the user's explicit approval.

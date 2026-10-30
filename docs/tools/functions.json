@@ -459,5 +459,84 @@
       ]
     },
     "strict": true
+  },
+  {
+    "type": "function",
+    "name": "kstudio_swap",
+    "description": "Optional. Replace a person in a video with a character image (mode simple), or change a tracked object (mode object), on a ComfyUI server running Openjutsu's workflows, set by KSTUDIO_COMFY_URL. Downloads the MP4 for use as a clip scene's src. Returns BACKEND_UNREACHABLE when no backend is configured or reachable; nothing else depends on it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "video": {
+          "type": "string",
+          "description": "Path of the source video."
+        },
+        "character": {
+          "type": "string",
+          "description": "Path of the character / reference image."
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "simple",
+            "object",
+            null
+          ],
+          "description": "simple (default) or object."
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "simple: who gets replaced; object: what the target becomes."
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What SAM tracks (simple: person, object: hair by default)."
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Generation seed. Default 0."
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Output .mp4. Default ./out/swap/<key>.mp4."
+        },
+        "timeout": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Seconds to wait. Default 3600."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "video",
+        "character",
+        "mode",
+        "prompt",
+        "target",
+        "seed",
+        "output",
+        "timeout"
+      ]
+    },
+    "strict": true
   }
 ]

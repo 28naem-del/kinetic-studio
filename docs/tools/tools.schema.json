@@ -694,6 +694,105 @@
         "idempotentHint": true,
         "openWorldHint": false
       }
+    },
+    {
+      "name": "kstudio_swap",
+      "mcp_name": "swap",
+      "title": "Swap a character into a video (optional backend)",
+      "description": "Optional. Replace a person in a video with a character image (mode simple), or change a tracked object (mode object), on a ComfyUI server running Openjutsu's workflows, set by KSTUDIO_COMFY_URL. Downloads the MP4 for use as a clip scene's src. Returns BACKEND_UNREACHABLE when no backend is configured or reachable; nothing else depends on it.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "video": {
+            "type": "string",
+            "description": "Path of the source video."
+          },
+          "character": {
+            "type": "string",
+            "description": "Path of the character / reference image."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "simple",
+              "object"
+            ],
+            "description": "simple (default) or object."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "simple: who gets replaced; object: what the target becomes."
+          },
+          "target": {
+            "type": "string",
+            "description": "What SAM tracks (simple: person, object: hair by default)."
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Generation seed. Default 0."
+          },
+          "output": {
+            "type": "string",
+            "description": "Output .mp4. Default ./out/swap/<key>.mp4."
+          },
+          "timeout": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Seconds to wait. Default 3600."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "video",
+          "character"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "output": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "prompt_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
     }
   ]
 }
