@@ -288,7 +288,7 @@ class Slam(Scene):
                     D.draw_text(c, word, 0, 0, f, ctx.pal(color, ga * (1 - E.out_quint(ue))), stroke=sw, valign="middle")
                     c.restore()
         c.scale(sc, sc)
-        D.draw_text(c, word, 0, 0, f, ctx.pal(color, E.clamp(u / max(ctx.beats(1 / 12), 1e-3))),
+        D.draw_text(c, word, 0, 0, f, ctx.pal(color),  # hard cut in: full on the hit frame
                     stroke=(5 * ctx.s if outline else 0), valign="middle")
         c.restore()
         draw_chrome(ctx, self, ground)
@@ -553,7 +553,7 @@ class Scramble(Scene):
         lay = D.glyph_layout(f, text)
         total = lay[-1][1] + lay[-1][2] if lay else 0
         cap = D.cap_height(f)
-        caret_w = (g.px(14) + cap * 0.09) if self.p["caret"] else 0.0
+        caret_w = (g.px(10) + cap * 0.09) if self.p["caret"] else 0.0
         x0 = ctx.cx - (total + caret_w) / 2  # word + caret centred as one block
         cy = ctx.H * 0.40
         ink = ctx.pal.on(self.ground)
@@ -578,7 +578,7 @@ class Scramble(Scene):
         done_t = locks[-1] if locks else 0.0
         if self.p["caret"]:
             if ctx.lt < done_t or int(ctx.local_beat * 2) % 2 == 0:
-                cx = x0 + total + g.px(14)
+                cx = x0 + total + g.px(10)
                 c.drawRect(skia.Rect.MakeXYWH(cx, cy - cap / 2, cap * 0.09, cap), D.paint(ctx.pal("accent")))
         if self.p["label"]:
             r = L.TYPE["kicker"]
