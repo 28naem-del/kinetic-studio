@@ -2,14 +2,14 @@
 // device (3D-tilted phone + callouts) -> features (one per 2 beats) -> cta (pulses on the beat,
 // pressed on the downbeat) -> brand (wordmark mask reveal on the hit).
 // Put a real screenshot at "screen": "screen.png" (9:19.5 portrait) or leave it out for the procedural UI.
-// audit: the features / cta / brand beats hold their copy for reading; designed motion (grain off,
-// pre-encode) is 0.646, so the mode's 0.7 floor is relaxed to 0.55 now that grain no longer counts.
+// Audit thresholds are the promo mode defaults. Held copy keeps moving by design: beat ripples and a
+// turning 3D icon on the features, a light sweep, ring wave and slow headline push on the CTA, a beat
+// ring and slow wordmark push on the end card.
 {
   "mode": "promo",
-  "audit": { "min_motion": 0.55 },
   "music": { "style": "bright", "bpm": 112 },
   "markers": [
-    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
+    { "kind": "section", "at": "0b", "name": "intro", "energy": 1 },
     { "kind": "section", "at": "features", "name": "body", "energy": 2 },
     { "kind": "section", "at": "cta", "name": "lift", "energy": 3 }
   ],
