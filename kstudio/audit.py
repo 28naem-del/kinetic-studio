@@ -117,11 +117,14 @@ def audit(path: str, expect: dict[str, Any] | None = None, thresholds: dict[str,
     if "fps" in expect:
         want = float(expect["fps"])
         check("fps", all(abs(r - want) < th["fps_tol"] for r in rates), shown, want)
-        if "duration" in expect:
+        if "duration" in expect and "frames" not in expect:
             n_want = int(round(float(expect["duration"]) * want))
             check("frames", abs((p["video_frames"] or 0) - n_want) <= 1, p["video_frames"], n_want)
     else:
         check("fps", rates[0] > 0 and all(abs(r - rates[0]) < th["fps_tol"] for r in rates), shown, "r = avg = n/d")
+    if "frames" in expect:
+        n_want = int(expect["frames"])
+        check("frames", abs((p["video_frames"] or 0) - n_want) <= 1, p["video_frames"], n_want)
     if "level" in expect:
         check("level", p["level"] == expect["level"], p["level"], expect["level"])
     return {"file": path, "probe": p, "motion": m, "loudness": loud, "checks": checks,

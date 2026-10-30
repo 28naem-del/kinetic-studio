@@ -13,7 +13,7 @@ from typing import Any
 
 from . import __version__
 from .audio.mix import mix_film
-from .audit import audit
+from .audit import audit, probe
 from .beats import BeatGrid, analyse_file
 from .film import Film
 from .presets import make_output
@@ -28,6 +28,32 @@ def beat_grid_for(spec: dict[str, Any]) -> BeatGrid | None:
         return None
     path = f if os.path.isabs(f) else os.path.join(spec.get("_dir", "."), f)
     return analyse_file(path)
+
+
+def add_mux_checks(a: dict[str, Any], mx: dict[str, Any]) -> None:
+    """Fold the mux verification (delivered fps/frame count vs the video track, post-AAC true peak
+    vs the mux ceiling) into an audit result as two extra checks and recompute its pass flag."""
+    vi, vo = mx["video_in"], mx["video_out"]
+    a["checks"]["mux_fps"] = {"ok": bool(mx["fps_ok"]),
+                              "value": f"{vo.get('frames')} fr r {vo.get('r_fps')} / n/d {vo.get('measured_fps')}",
+                              "want": f"{vi.get('frames')} fr @ {vi.get('r_fps')}"}
+    a["checks"]["mux_true_peak"] = {"ok": bool(mx["true_peak_ok"]), "value": mx["loudness"].get("true_peak"),
+                                    "want": f"<= {mx['ceiling_dbtp']} dBTP after {len(mx['attempts'])} encode(s)"}
+    a["pass"] = all(c["ok"] for c in a["checks"].values())
+
+
+def delivery_summary(mx: dict[str, Any], p: dict[str, Any], a: dict[str, Any] | None) -> dict[str, Any]:
+    """Post-mux numbers of the delivered file in one place: loudness, true peak, rates, A/V gap."""
+    lo = (a or {}).get("loudness") or mx["loudness"]
+    vo = mx["video_out"]
+    ad = (p.get("audio") or {}).get("duration")
+    vd = p.get("video_duration")
+    return {"lufs": lo.get("lufs"), "true_peak": lo.get("true_peak"), "true_peak_ok": mx["true_peak_ok"],
+            "mux_encodes": len(mx["attempts"]), "mux_gain_db": mx["gain_db"],
+            "r_fps": vo.get("r_fps"), "avg_fps": vo.get("avg_fps"), "measured_fps": vo.get("measured_fps"),
+            "frames": vo.get("frames"), "fps_ok": mx["fps_ok"],
+            "av_gap": round(ad - vd, 4) if ad is not None and vd is not None else None,
+            "black_frames": (a or {}).get("motion", {}).get("black_frames")}
 
 
 def build(spec: dict[str, Any], out_path: str, preset: str = "reel", fps: int = 30, quality: str = "standard",
@@ -86,7 +112,14 @@ def build(spec: dict[str, Any], out_path: str, preset: str = "reel", fps: int = 
     audio_s = time.time() - t1
     log.write("audio_done", seconds=round(audio_s, 2), final=am["final"], gain_db=am["gain_db"], sfx=am["sfx_count"],
               music=am["music"])
-    mux(video, wav, out_path)
+    mx = mux(video, wav, out_path)
+    log.write("mux", attempts=mx["attempts"], gain_db=mx["gain_db"], true_peak_ok=mx["true_peak_ok"],
+              fps_ok=mx["fps_ok"], loudness=mx["loudness"])
+    if not mx["fps_ok"]:
+        say(f"mux: delivered frame rate/count drifted: {mx['video_out']} (video track {mx['video_in']})")
+    if not mx["true_peak_ok"]:
+        say(f"mux: true peak {mx['loudness'].get('true_peak')} dBTP over the {mx['ceiling_dbtp']} dBTP ceiling "
+            f"after {len(mx['attempts'])} encodes")
     total = time.time() - t_start
     finished = datetime.now().astimezone()
     report: dict[str, Any] = {
@@ -96,15 +129,21 @@ def build(spec: dict[str, Any], out_path: str, preset: str = "reel", fps: int = 
         "audio_seconds": round(audio_s, 2), "total_seconds": round(total, 2),
         "started": started.isoformat(timespec="seconds"), "finished": finished.isoformat(timespec="seconds"),
         "audio": {k: v for k, v in am.items() if k != "sfx"}, "timeline": film.summary(),
-        "lint": lint,
+        "lint": lint, "mux": {k: v for k, v in mx.items() if k != "out"},
     }
     if do_audit:
         th = dict(film.cfg.get("audit", {}))
         th.setdefault("lufs", target)
         a = audit(out_path, {"duration": film.duration, "width": out.width, "height": out.height, "fps": out.fps,
                              "level": out.level}, th)
+        add_mux_checks(a, mx)
         report["audit"] = a
         log.write("audit", passed=a["pass"], checks={k: v["ok"] for k, v in a["checks"].items()})
+        p = a["probe"]
+    else:
+        p = probe(out_path)
+    report["delivery"] = delivery_summary(mx, p, report.get("audit"))
+    report["pass"] = report["audit"]["pass"] if do_audit else bool(mx["fps_ok"] and mx["true_peak_ok"])
     with open(os.path.join(out_dir, f"{name}.report.json"), "w") as fh:
         json.dump(report, fh, indent=1, default=str)
     log.write("done", seconds=round(total, 2), output=os.path.abspath(out_path))

@@ -2,11 +2,13 @@
 
   kstudio modes | scenes [type]           what the engine can make
   kstudio new <mode> <dir>                starter project from the mode's example spec
-  kstudio info <spec>                     resolved timeline (scenes, markers, beats)
+  kstudio info <spec>                     resolved timeline (scenes, markers, beats) + grid lint
   kstudio preview <spec> [--at 1.2,3]     stills + contact sheet (fast, single process)
   kstudio render <spec> [-o out.mp4] [--preset reel|landscape|square] [--fps 30|60]
              [--quality draft|standard|high] [--4k] [--workers auto|N] [--fresh]
-  kstudio audit <video> [--mode m]        motion / loudness / codec / duration checks
+             [--snap [beat|8th|16th|bar]]
+  kstudio audit <video> [--mode m] [--fps N] [--frames N]
+                                          motion / loudness / codec / fps / duration checks
   kstudio mix <spec> -o out.wav           soundtrack only
   kstudio beats <audio>                   tempo + beat grid of a music file
   kstudio sfx <dir>                       export the synthesized SFX kit as WAVs
@@ -98,6 +100,11 @@ def cmd_info(a: argparse.Namespace) -> int:
     for m in film.tl.markers:
         kinds[m.kind] = kinds.get(m.kind, 0) + 1
     print("  markers:", ", ".join(f"{k}={v}" for k, v in sorted(kinds.items())))
+    lint = film.lint()
+    warns = [w for w in lint if w["level"] == "warn"]
+    print(f"  lint: {len(warns)} warning(s), {len(lint) - len(warns)} info")
+    for w in lint if a.verbose else warns:
+        print(f"    {w['level']:<4} {w['where']}: {w['msg']}")
     return 0
 
 
@@ -121,7 +128,7 @@ def cmd_render(a: argparse.Namespace) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     workers = a.workers if a.workers == "auto" else int(a.workers)
     r = build(spec, out, a.preset, a.fps, a.quality, a.k4, workers, a.fresh, not a.no_audit,
-              on_progress=None if a.quiet else _bar, say=(lambda s: None) if a.quiet else print)
+              on_progress=None if a.quiet else _bar, say=(lambda s: None) if a.quiet else print, snap=a.snap)
     if not a.quiet:
         sys.stderr.write("\n")
     rv = r["render"]
@@ -130,8 +137,7 @@ def cmd_render(a: argparse.Namespace) -> int:
     print(f"audio: {r['audio']['final']['lufs']} LUFS, {r['audio']['final']['true_peak']} dBTP")
     if "audit" in r:
         print(format_report(r["audit"]))
-        return 0 if r["audit"]["pass"] else 3
-    return 0
+    return 0 if r.get("pass", True) else 3
 
 
 def cmd_audit(a: argparse.Namespace) -> int:
@@ -142,7 +148,12 @@ def cmd_audit(a: argparse.Namespace) -> int:
         th["min_motion"] = a.min_motion
     if a.max_hold is not None:
         th["max_hold"] = a.max_hold
-    r = audit(a.video, {}, th)
+    expect: dict = {}
+    if a.fps is not None:
+        expect["fps"] = a.fps
+    if a.frames is not None:
+        expect["frames"] = a.frames
+    r = audit(a.video, expect, th)
     print(json.dumps(r, indent=1) if a.json else format_report(r))
     return 0 if r["pass"] else 3
 
@@ -186,9 +197,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("dir")
     s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_new)
-    s = sub.add_parser("info", help="print the resolved timeline")
+    s = sub.add_parser("info", help="print the resolved timeline and beat-grid lint")
     s.add_argument("spec")
     s.add_argument("--json", action="store_true")
+    s.add_argument("-v", "--verbose", action="store_true", help="also list info-level lint items")
     s.set_defaults(fn=cmd_info)
     s = sub.add_parser("preview", help="render stills + a contact sheet")
     s.add_argument("spec")
@@ -207,7 +219,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--4k", dest="k4", action="store_true", help="double the preset resolution")
     s.add_argument("--workers", default="auto")
     s.add_argument("--fresh", action="store_true", help="ignore finished chunks")
-    s.add_argument("--no-audit", action="store_true")
+    s.add_argument("--snap", nargs="?", const="beat", choices=["beat", "8th", "16th", "bar"],
+                   help="snap seconds-valued scene lengths/starts to the beat grid (bare --snap = beat); "
+                        "cue sfx snap to the given division")
+    s.add_argument("--no-audit", action="store_true", help="skip the audit (mux fps/true-peak checks still run)")
     s.add_argument("-q", "--quiet", action="store_true")
     s.set_defaults(fn=cmd_render)
     s = sub.add_parser("audit", help="audit a finished video")
@@ -215,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--mode")
     s.add_argument("--min-motion", type=float)
     s.add_argument("--max-hold", type=float)
+    s.add_argument("--fps", type=float, help="expected frame rate (r = avg = n/d must equal it)")
+    s.add_argument("--frames", type=int, help="expected video frame count (+-1)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_audit)
     s = sub.add_parser("mix", help="render the soundtrack only")
