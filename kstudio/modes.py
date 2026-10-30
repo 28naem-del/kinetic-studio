@@ -13,6 +13,7 @@ THEMES: dict[str, dict[str, Any]] = {
         "bg": "#0b0b0f", "bg2": "#17171f", "paper": "#f2eee5", "accent": "#ff3b2e", "accent2": "#ffd23f",
         "ink": "#f2eee5", "ink_dark": "#0b0b0f", "muted": "#6e6e7a", "pos": "#3ee08f", "neg": "#ff3b2e",
         "display": "Archivo", "body": "Inter", "mono": "JetBrainsMono", "ground_style": "solid",
+        "grade": "ink",
     },
     "lab": {  # explainer: deep navy, clinical teal, warm amber for emphasis
         "bg": "#0a1520", "bg2": "#10273a", "paper": "#edf3f6", "accent": "#38d6c4", "accent2": "#ffb547",
@@ -45,6 +46,7 @@ MODES: dict[str, dict[str, Any]] = {
                    "carry": "world", "ground_depth": 3.0},
         "post": {"bloom": 0.55, "grain": 0.055, "vignette": 0.35, "chroma": 1.0},
         "transition": "whip",
+        "chrome": True,
         "audit": {"max_hold": 0.75, "min_motion": 0.85},
     },
     "explainer": {
