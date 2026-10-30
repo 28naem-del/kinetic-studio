@@ -1189,7 +1189,11 @@ class Bars(DataScene):
         out = []
         for i, it in enumerate(items):
             hl = it.get("label") == self.p["highlight"]
-            out.append(_sfx(self.bt(f0 + i * st), "blip_up" if hl else "data_blip", -4.0 if hl else -7.0))
+            b = f0 + i * st
+            on8 = abs(b * 2 - round(b * 2)) < 1e-6
+            if on8 or hl:   # blips stay on the 8th grid; a 16th stagger sounds every other bar
+                out.append(_sfx(self.bt(b if on8 else math.ceil(b * 2 - 1e-6) / 2), "blip_up" if hl else "data_blip",
+                                -4.0 if hl else -7.0))
         if items:
             done = math.ceil(f0 + (len(items) - 1) * st + gr - 1e-6)
             if any("prev" in it for it in items):
