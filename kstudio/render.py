@@ -71,9 +71,18 @@ def encoder_cmd(out: Output, path: str, threads: int = ENCODER_THREADS) -> list[
             "-f", "mpegts", path]
 
 
+MIN_CHUNK_FRAMES = 3  # -bf 2: a chunk of 1-2 frames has no B-frame reorder delay (dts == pts), unlike every
+                      # other chunk, so concatenated it leaves a dts gap (61 frames read 610/21 fps)
+
+
 def plan_chunks(n_frames: int, fps: int, chunk_seconds: float = 2.0) -> list[tuple[int, int]]:
+    """Fixed-size chunks covering [0, n_frames); a tail shorter than MIN_CHUNK_FRAMES joins the
+    previous chunk."""
     size = max(1, int(round(fps * chunk_seconds)))
-    return [(a, min(a + size, n_frames)) for a in range(0, n_frames, size)]
+    ch = [(a, min(a + size, n_frames)) for a in range(0, n_frames, size)]
+    if len(ch) > 1 and ch[-1][1] - ch[-1][0] < MIN_CHUNK_FRAMES:
+        ch[-2:] = [(ch[-2][0], n_frames)]
+    return ch
 
 
 # ---------------------------------------------------------------------- worker
@@ -191,6 +200,15 @@ class RenderLog:
         self.fh.close()
 
 
+def write_concat_list(path: str, work_dir: str, chunks: list[tuple[int, int]], fps: int) -> None:
+    """Concat-demuxer list for the chunk files, each with its exact duration so the timestamps of the
+    joined stream stay on the frame grid (avg_frame_rate == fps)."""
+    with open(path, "w") as fh:
+        for k, (a, b) in enumerate(chunks):
+            fh.write(f"file '{os.path.join(work_dir, f'chunk_{k:04d}.ts')}'\n")
+            fh.write(f"duration {(b - a) / fps:.6f}\n")
+
+
 def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerprint: str, n_frames: int,
                  workers: int, grid: dict | None = None, post: dict | None = None, chunk_seconds: float = 2.0,
                  log: RenderLog | None = None, on_progress: Callable[[dict], None] | None = None) -> dict:
@@ -292,11 +310,11 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
             if interrupted is not None:  # re-raised after cleanup: Ctrl-C (exit 130) / a cancel, not a failure
                 raise interrupted
             raise RuntimeError(error)
-    # concat
+    # concat. Every entry carries its exact duration (frames / fps): without it the demuxer estimates a
+    # chunk's length from its last packet's pts, which with B-frame reordering can be one frame short,
+    # so the next chunk's first frame lands on an already-used pts and the file reads e.g. 13500/449 fps.
     lst = os.path.join(work_dir, "concat.txt")
-    with open(lst, "w") as fh:
-        for k in range(len(chunks)):
-            fh.write(f"file '{os.path.join(work_dir, f'chunk_{k:04d}.ts')}'\n")
+    write_concat_list(lst, work_dir, chunks, out.fps)
     r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst,
                         "-c", "copy", "-movflags", "+faststart", out_path], capture_output=True, text=True)
     if r.returncode != 0:
@@ -307,6 +325,13 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
         log.write("render_done", frames=got, expected=n_frames, seconds=round(el, 2), workers=workers)
     if got != n_frames:
         raise RuntimeError(f"final video has {got} frames, expected {n_frames}")
+    vt = video_timing(out_path)
+    if log:
+        log.write("concat_timing", avg_frame_rate=vt["avg_frame_rate"], r_frame_rate=vt["r_frame_rate"],
+                  video_duration=vt["video_duration"])
+    if abs(vt["avg_fps"] - out.fps) > 1e-3 or abs(vt["video_duration"] - n_frames / out.fps) > 0.5 / out.fps:
+        raise RuntimeError(f"concatenated video timing drifted: avg_frame_rate {vt['avg_frame_rate']}, "
+                           f"duration {vt['video_duration']} s for {n_frames} frames at {out.fps} fps")
     return {"frames": got, "seconds": round(el, 2), "workers": workers, "resumed_chunks": len(done),
             "rendered_chunks": len(todo)}
 
