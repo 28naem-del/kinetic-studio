@@ -589,6 +589,52 @@ TOOLS: list[Tool] = [
          output={"pass": {"type": "boolean"}, "failed": {"type": "array", "items": {"type": "string"}},
                  "checks": {"type": "object"}}),
 ]
+
+
+def _extension_tools(module: Any) -> list[Tool]:
+    """Tools of an optional extension module: `MCP_TOOLS` (Tool objects, or dicts with name, title,
+    description, properties / inputSchema, required, read_only, destructive, idempotent, output) and
+    `MCP_HANDLERS` ({name: handler(args, progress) -> dict}; a dict tool takes its handler from here)."""
+    handlers: dict[str, Any] = dict(getattr(module, "MCP_HANDLERS", None) or {})
+    taken = {t.name for t in TOOLS}
+    out: list[Tool] = []
+    for item in getattr(module, "MCP_TOOLS", None) or []:
+        if isinstance(item, Tool):
+            tool = item
+            if item.name in handlers:
+                tool.handler = handlers[item.name]
+        elif isinstance(item, dict) and item.get("name") in handlers:
+            schema = item.get("inputSchema") or {}
+            tool = Tool(str(item["name"]), str(item.get("title") or item["name"]), str(item.get("description", "")),
+                        dict(item.get("properties") or schema.get("properties") or {}),
+                        tuple(item.get("required") or schema.get("required") or ()), handlers[item["name"]],
+                        read_only=bool(item.get("read_only", False)), destructive=bool(item.get("destructive", False)),
+                        idempotent=bool(item.get("idempotent", False)), output=dict(item.get("output") or {}))
+        else:
+            log(f"extension tool skipped (no handler or unknown shape): {item!r:.80}")
+            continue
+        if tool.name in taken:
+            log(f"extension tool {tool.name!r} skipped: the name is taken")
+            continue
+        taken.add(tool.name)
+        out.append(tool)
+    return out
+
+
+def _load_extensions() -> None:
+    """Optional extension hook: when a `kstudio.swap` module is installed, its MCP tools join the list
+    (and docs/tools/ once regenerated). ImportError means it is not installed: nothing is added."""
+    try:
+        from kstudio import swap  # type: ignore[attr-defined,unused-ignore]
+    except ImportError:
+        return
+    try:
+        TOOLS.extend(_extension_tools(swap))
+    except Exception as e:  # noqa: BLE001 - a broken optional extension must not take the built-in tools down
+        log(f"optional extension kstudio.swap not loaded: {type(e).__name__}: {e}")
+
+
+_load_extensions()
 TOOL_INDEX = {t.name: t for t in TOOLS}
 
 

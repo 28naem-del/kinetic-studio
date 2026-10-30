@@ -154,3 +154,84 @@ def test_subprocess_stdout_is_pure_json(tmp_path):
     assert r.returncode == 0
     d = json.loads(r.stdout)
     assert d["brief"] == "quarterly revenue story" and len(d["examples"]) == 2 and '"$defs"' in d["system"]
+
+
+def test_interrupted_render_is_exit_130(capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "_need_ffmpeg", lambda: None)
+    monkeypatch.setattr(pipeline, "build", _fake_build(boom=KeyboardInterrupt()))
+    d, _ = run(capsys, "render", KINETIC, "-o", str(tmp_path / "k.mp4"), "--json", code=130)
+    assert d["error"]["code"] == "INTERRUPTED"
+
+
+# --------------------------------------------------------------------------- optional extension hooks
+
+def _fake_swap(monkeypatch):
+    """Install a stand-in `kstudio.swap` module (the optional extension) for one test."""
+    import types
+
+    import kstudio
+    mod = types.ModuleType("kstudio.swap")
+
+    def cmd_swap(a):
+        return {"video": a.video, "backend": "fake"}
+
+    def register(sub):
+        s = sub.add_parser("swap", help="fake swap")
+        s.add_argument("--video", required=True)
+        s.add_argument("--json", action="store_true")
+        s.set_defaults(fn=cmd_swap)
+
+    mod.register = register
+    monkeypatch.setitem(sys.modules, "kstudio.swap", mod)
+    monkeypatch.setattr(kstudio, "swap", mod, raising=False)
+    return mod
+
+
+def test_cli_extension_hook_registers_swap(capsys, monkeypatch):
+    _fake_swap(monkeypatch)
+    d, _ = run(capsys, "swap", "--video", "clip.mp4", "--json")
+    assert d == {"ok": True, "command": "swap", "version": __version__, "exit_code": 0, "video": "clip.mp4",
+                 "backend": "fake"}
+
+
+def test_cli_without_extension_has_no_swap(capsys, monkeypatch):
+    monkeypatch.setitem(sys.modules, "kstudio.swap", None)  # import of kstudio.swap raises ImportError
+    with pytest.raises(SystemExit) as e:
+        cli.main(["swap", "--video", "clip.mp4", "--json"])
+    assert e.value.code == 2 and json.loads(capsys.readouterr().out)["error"]["code"] == "USAGE"
+    assert cli.main(["modes", "--json"]) == 0
+
+
+def test_mcp_extension_hook_adds_and_dispatches_swap_tools(tmp_path):
+    """kstudio.mcp_server picks up MCP_TOOLS / MCP_HANDLERS at import (run in a fresh interpreter)."""
+    code = r'''
+import json, sys, types
+import kstudio
+mod = types.ModuleType("kstudio.swap")
+mod.MCP_TOOLS = [{"name": "swap_video", "title": "Swap", "description": "fake",
+                  "properties": {"video": {"type": "string"}}, "required": ["video"]},
+                 {"name": "audit", "description": "clashes with a built-in tool"}]
+mod.MCP_HANDLERS = {"swap_video": lambda args, progress: {"ok": True, "video": args["video"]},
+                    "audit": lambda args, progress: {"ok": False}}
+sys.modules["kstudio.swap"] = mod
+kstudio.swap = mod
+from kstudio import mcp_server as M
+names = [t["name"] for t in M.tool_list()]
+print(json.dumps({"names": names, "call": M.run_tool("kstudio_swap_video", {"video": "a.mp4"}),
+                  "bad": M.run_tool("swap_video", {}), "audit_builtin": M.find_tool("audit").handler is M.t_audit}))
+'''
+    env = dict(os.environ, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=str(tmp_path),
+                       timeout=120)
+    assert r.returncode == 0, r.stderr[-2000:]
+    d = json.loads(r.stdout)
+    assert d["names"].count("swap_video") == 1 and d["names"].count("audit") == 1 and d["names"][-1] == "swap_video"
+    assert d["call"] == {"ok": True, "video": "a.mp4"}
+    assert d["bad"]["ok"] is False and d["bad"]["error"]["code"] == "INVALID_ARGUMENTS"
+    assert d["audit_builtin"] is True and "name is taken" in r.stderr
+
+
+def test_mcp_without_extension_keeps_the_built_in_tools():
+    from kstudio import mcp_server as M
+    assert [t.name for t in M.TOOLS] == ["list_modes", "list_scenes", "get_schema", "validate_spec", "new_spec",
+                                         "preview", "render", "audit"]

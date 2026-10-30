@@ -25,7 +25,7 @@ keeps the install line stable). `kstudio-mcp` is installed with the package.
 | `validate <spec> [--fix-hints] [--strict] [--no-build]` | schema check + dry build | `valid`, `errors[]`, `warnings[]`, `summary`, `fix_prompt` |
 | `brief --mode m --text "..." [--duration s] [--preset p] [--all-scenes] [-o file]` | prompt pack, no model call | `system`, `user`, `prompt`, `schema`, `examples[]`, `rules`, `scene_types[]`, `response_format`, `next[]` |
 | `info <spec> [-v]` | resolved timeline + beat-grid lint | `mode`, `duration`, `bpm`, `scenes[]`, `transitions[]`, `lint[]` |
-| `preview <spec> [--at 1.2,3] [--preset] [--scale] [--quality]` | stills + contact sheet | `stills[]`, `contact_sheet`, `out_dir`, `seconds`, `warnings[]` |
+| `preview <spec> [-o dir] [--at 1.2,3] [--preset] [--scale] [--quality]` | stills + contact sheet (default dir `<project>/out/preview`) | `stills[]` {t, label, path}, `contact_sheet`, `out_dir`, `seconds`, `summary`, `warnings[]` |
 | `render <spec> [-o out.mp4] [--preset] [--fps] [--quality draft\|standard\|high] [--4k] [--workers] [--fresh] [--snap [beat\|8th\|16th\|bar]] [--no-audit] [-q]` | final MP4 (parallel, resumable) | the build report: `output`, `duration`, `frames`, `size`, `fps`, `render`, `audio`, `mux`, `audit`, `delivery`, `pass`, `report_path`, `warnings[]` |
 | `audit <video> [--mode m] [--fps N] [--frames N] [--min-motion x] [--max-hold s]` | quality audit of any video | `pass`, `checks{name: {ok, value, want}}`, ... |
 | `mix <spec> -o out.wav` | soundtrack only | `output`, `final{lufs,true_peak}`, `sfx_count`, `music` |
@@ -44,7 +44,7 @@ for every call.
 Success:
 
 ```json
-{"ok": true, "command": "validate", "version": "0.1.0", "exit_code": 0,
+{"ok": true, "command": "validate", "version": "0.2.0", "exit_code": 0,
  "valid": true, "spec_path": "/abs/spec.json", "errors": [], "warnings": [],
  "summary": {"mode": "promo", "duration": 15.0, "bpm": 112.0, "beats": 28.0, "scenes": 4, "transitions": 3}}
 ```
@@ -56,7 +56,7 @@ Failure adds `error`; whatever the command produced before failing stays in the 
 an audit failure still carries `output` and `audit`):
 
 ```json
-{"ok": false, "command": "validate", "version": "0.1.0", "exit_code": 3, "valid": false,
+{"ok": false, "command": "validate", "version": "0.2.0", "exit_code": 3, "valid": false,
  "errors": [{"path": "/scenes/1/type", "message": "unknown scene type \"titel\"",
              "hint": "did you mean \"title\"? scene types: bars, brand, ...", "keyword": "enum",
              "severity": "error", "value": "titel"}],
@@ -96,6 +96,9 @@ Defined once in `kstudio/exitcodes.py`; `kinetic-studio exit-codes --json` print
 | 7 | BACKEND_UNREACHABLE | reserved for a pluggable render backend; not raised yet | `BACKEND_UNREACHABLE` |
 | 130 | INTERRUPTED | Ctrl-C; re-run the same command to resume from finished chunks | `INTERRUPTED` |
 
+Ctrl-C during `render` stops the workers, keeps every finished 2-second chunk and exits 130 with
+`error.code` `INTERRUPTED`; the same command then resumes from the finished chunks.
+
 Usage errors are raised as `SystemExit(2)` (argparse behaviour) after the envelope is printed, so the
 process exit code is 2 either way.
 
@@ -134,3 +137,41 @@ The pack contains the system prompt (output contract, the mode's beat-unit rules
 complete example specs: the mode's own and a contrasting mode), the user message (the brief plus the
 length rounded to whole bars at the mode's BPM), and the same parts as separate keys. `--text -`
 reads the brief from stdin; without `--json` the plain-text prompt is printed.
+
+## Extension hooks
+
+Two optional hooks let an add-on module named `kstudio.swap` extend the command line and the MCP
+server without changes to either. The add-on is optional: when `import kstudio.swap` raises
+`ImportError` (not installed, or one of its own dependencies is missing) both hooks do nothing and the
+built-in commands and tools are unchanged.
+
+**Command line.** After the built-in subcommands are added, `build_parser()` imports `kstudio.swap`
+and calls `swap.register(subparsers)` with the argparse subparsers object. A subcommand added there
+works like a built-in one when it sets `fn` to a function that takes the parsed arguments and returns
+a dict:
+
+```python
+def register(subparsers):
+    s = subparsers.add_parser("swap", help="...")
+    s.add_argument("--video", required=True)
+    s.add_argument("--json", action="store_true")   # so --json also works after the command
+    s.set_defaults(fn=cmd_swap)                     # cmd_swap(args) -> dict (the JSON result keys)
+```
+
+The returned dict becomes the `--json` envelope; raising an error class from `kstudio/exitcodes.py`
+(for example `BackendUnreachable`, exit 7) gives the matching exit code and `error.code`. An exception
+inside `register` is reported as one line on stderr and the built-in commands keep working.
+
+**MCP server.** When `kstudio.mcp_server` is imported it appends the add-on's tools to `TOOLS`:
+
+* `swap.MCP_TOOLS`: a list of tool definitions, either `kstudio.mcp_server.Tool` objects or dicts with
+  `name`, `title`, `description`, `properties` (or a full `inputSchema`), `required`, and optional
+  `read_only`, `destructive`, `idempotent` (all default false) and `output` (extra output-schema
+  properties).
+* `swap.MCP_HANDLERS`: `{tool name: handler(arguments, progress) -> dict}`. A dict tool without a
+  handler is skipped. A `Tool` object keeps its own handler unless this mapping names it.
+
+Add-on tools are listed by `tools/list` and `--list-tools`, dispatched by `tools/call`, `--call` and
+`run_tool()` with the same argument checking and error shape as the built-in tools. A tool whose name
+is already taken is skipped with a note on stderr. Run `python docs/tools/generate.py` after adding
+tools so `docs/tools/` lists them too.

@@ -656,7 +656,24 @@ def build_parser(prog: str = "kinetic-studio") -> Parser:
     s.add_argument("dir")
     add("doctor", cmd_doctor, "check ffmpeg / ffprobe / libx264 / skia and report versions")
     add("exit-codes", cmd_exit_codes, "print the exit-code table")
+    _register_extensions(sub)
     return p
+
+
+def _register_extensions(sub: Any) -> None:
+    """Optional extension hook: a `kstudio.swap` module, when installed, adds its own subcommands with
+    `register(subparsers)`. Absent (ImportError) means the extension is not installed and nothing is added."""
+    try:
+        from kstudio import swap  # type: ignore[attr-defined,unused-ignore]
+    except ImportError:
+        return
+    register = getattr(swap, "register", None)
+    if not callable(register):
+        return
+    try:
+        register(sub)
+    except Exception as e:  # noqa: BLE001 - a broken optional extension must not take the built-in commands down
+        _log(f"kinetic-studio: optional extension kstudio.swap not loaded: {type(e).__name__}: {e}")
 
 
 def _prog() -> str:
