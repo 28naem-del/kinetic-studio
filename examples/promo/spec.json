@@ -4,10 +4,13 @@
 // Put a real screenshot at "screen": "screen.png" (9:19.5 portrait) or leave it out for the procedural UI.
 // Audit thresholds are the promo mode defaults. Held copy keeps moving by design: beat ripples and a
 // turning 3D icon on the features, a light sweep, ring wave and slow headline push on the CTA, a beat
-// ring and slow wordmark push on the end card.
+// ring and slow wordmark push on the end card. The CTA's copy leaves line by line just ahead of the
+// circle wipe, which opens from the button ("at" = the button centre). "post" deepens the studio grade.
 {
   "mode": "promo",
   "music": { "style": "bright", "bpm": 112 },
+  "post": { "bloom": 0.4, "vignette": 0.32,
+            "grade": { "base": "studio", "contrast": 0.13, "shadow_amount": 0.14, "highlight_amount": 0.06 } },
   "markers": [
     { "kind": "section", "at": "0b", "name": "intro", "energy": 1 },
     { "kind": "section", "at": "features", "name": "body", "energy": 2 },
@@ -30,10 +33,10 @@
         { "icon": "shield", "title": "Private", "text": "Your data stays yours." }
       ], "dur": "8b", "transition": "push-left" },
     { "type": "cta", "id": "cta", "kicker": "Free for 14 days", "headline": "Start free today.", "button": "Get Flowly",
-      "done": "You're in", "note": "No card needed. Cancel anytime.", "sub": "iOS · Android · Web",
+      "done": "You're in", "note": "No card needed. Cancel anytime.", "sub": "iOS · Android · Web", "proof": "4.9 · 20k ratings",
       "lockup": "Flowly", "mark": "spark", "tap_at": "4b", "dur": "8b", "transition": { "kind": "slice", "n": 6 } },
     { "type": "brand", "id": "end", "text": "flowly", "tagline": "Focus, beautifully.", "url": "flowly.app",
       "mark": "spark", "badges": ["App Store", "Google Play"], "hit_at": "1b", "dur": "4b",
-      "transition": { "kind": "wipe", "shape": "circle", "at": [0.5, 0.53] } }
+      "transition": { "kind": "wipe", "shape": "circle", "at": [0.5, 0.624] } }
   ]
 }

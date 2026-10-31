@@ -1,4 +1,4 @@
-"""Promo example: the frame stays on the grid under the camera, the CTA reads, the end card holds."""
+"""Promo example: the frame stays on the grid under the camera, the CTA reads and leaves ahead of the\ncircle wipe, the end card holds inside the safe lines."""
 import os
 
 import numpy as np
@@ -6,6 +6,7 @@ import pytest
 import skia
 from conftest import EXAMPLES
 
+from kstudio import draw as D
 from kstudio import layout as L
 from kstudio.compositor import Compositor
 from kstudio.film import Film
@@ -92,14 +93,91 @@ def test_cta_label_contrast_is_at_least_4_5(film):
         assert contrast(ctx.pal.rgb(ink), ctx.pal.rgb(key)) >= 4.5, key
 
 
-def test_cta_copy_is_gone_before_the_circle_wipe_opens(film):
-    cta = film.scenes[2]
+def _cta_layout_at(film, t):
+    """(scene, ctx, layout) of the CTA as drawn at film time t (through the compositor and its camera)."""
+    sc = film.scenes[2]
+    comp = Compositor(film, make_output("reel", quality="draft"))
+    got = []
+    orig = sc.layout
+
+    def spy(ctx):
+        lay = orig(ctx)
+        got.append((ctx, lay))
+        return lay
+
+    sc.layout = spy
+    try:
+        comp.frame(int(round(t * 30)))
+    finally:
+        del sc.layout
+    assert got
+    return (sc, *got[-1])
+
+
+def test_cta_block_spans_the_safe_area_with_the_button_in_the_thumb_zone(film):
+    sc = film.scenes[2]
+    sc, ctx, lay = _cta_layout_at(film, sc.start + sc.bt(3))
+    g, b, reach = lay["g"], lay["button"], lay["reach"]
+    assert lay["proof_base"] + reach < b.top()                                   # proof row clears the ring wave
+    assert b.bottom() + reach < lay["note_base"] - D.cap_height(lay["nf"])      # and so does the note
+    assert lay["rule_y"] <= g.safe_bottom
+    assert b.centerY() > 0.55 * g.H                                             # the button sits low, in thumb reach
+    cx, cy = (float(v) for v in film.boundaries[2].params["at"])
+    assert b.left() < cx * W < b.right() and b.top() < cy * H < b.bottom()      # the end card opens from the button
+
+
+def test_cta_copy_leaves_line_by_line_ahead_of_the_circle_wipe_edge(film):
     wipe = film.boundaries[2]
-    assert wipe.kind == "wipe" and wipe.a is cta
-    lt = wipe.t0 - cta.start
-    for order in range(5):
-        assert cta._exit(lt, cta.beat_len, order) == pytest.approx(1.0), order
-    assert cta._exit(cta.tap() + cta.beat_len, cta.beat_len, 4) == 0.0   # the copy holds through the tap
+    assert wipe.kind == "wipe" and wipe.a is film.scenes[2]
+    sc, ctx, lay = _cta_layout_at(film, wipe.t0 - 0.05)
+    g, bl, hf = lay["g"], sc.beat_len, lay["hf"]
+    pieces = [skia.Rect(g.x0, ln.baseline - D.cap_height(hf), g.x1, ln.baseline) for ln in lay["blk"].lines]
+    pieces += [skia.Rect(g.x0, lay["proof_base"] - g.bl(6), g.x1, lay["proof_base"]),
+               skia.Rect(g.x0, lay["note_base"] - D.cap_height(lay["nf"]), g.x1, lay["note_base"])]
+    covers = [sc.covered_at(ctx, g, r) for r in pieces]
+    for cv in covers:
+        assert cv is not None
+        assert wipe.t0 - sc.start - 1e-6 <= cv <= wipe.t1 - sc.start + 1e-6
+        assert sc._exit(cv - 0.125 * bl, bl, 0, cv) == pytest.approx(1.0)   # gone before the edge arrives
+        assert sc._exit(sc.tap() + bl, bl, 0, cv) == 0.0                    # the copy holds through the tap
+    assert len({round(cv, 3) for cv in covers}) >= 3                        # line by line, not all at once
+    assert covers[-1] < covers[0]                                           # the note (nearest the button) first
+
+
+def test_end_card_rings_never_cross_the_top_safe_line(film, monkeypatch):
+    sc = film.scenes[3]
+    rings, grids = [], []
+    orig_rrect, orig_layout = D.rrect, sc.layout
+
+    def rrect(c, x, y, w, h, r, p):
+        if p.getStyle() == skia.Paint.kStroke_Style and p.getAlpha() > 0:
+            rings.append((y, p.getStrokeWidth()))
+        orig_rrect(c, x, y, w, h, r, p)
+
+    def layout(ctx):
+        lay = orig_layout(ctx)
+        grids.append(lay["g"])
+        return lay
+
+    monkeypatch.setattr(D, "rrect", rrect)
+    monkeypatch.setattr(sc, "layout", layout)
+    canvas = skia.Canvas(np.zeros((8, 8, 4), np.uint8))
+    n = 0
+    for k in range(8, 32):   # every 8th of the hold, against that frame's (camera-pinned) safe line
+        rings.clear()
+        grids.clear()
+        film.draw(canvas, sc.start + sc.bt(k / 8))
+        g = grids[-1]
+        tops = [y - sw / 2 for y, sw in rings if sw > g.bl(1)]
+        n += len(tops)
+        assert all(top >= g.safe_top - 0.5 for top in tops), (k, min(tops), g.safe_top)
+    assert n > 0
+
+
+def test_end_card_url_ink_reads(film):
+    ctx = film._ctx(skia.Canvas(np.zeros((8, 8, 4), np.uint8)), film.scenes[3].start + 1.0)
+    for ground in ("bg", "bg2"):
+        assert contrast(ctx.pal.rgb("accent2"), ctx.pal.rgb(ground)) >= 4.5, ground
 
 
 def test_end_card_is_full_within_one_beat():

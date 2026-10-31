@@ -8,17 +8,22 @@ springs only for physical objects (the device and the pill-shaped callouts / but
 
 Scenes
     device    phone mockup at ~70 % of the frame height, yaw tilt (in_out_quint over `tilt`
-              beats), bezel highlight that follows the tilt, soft contact + ambient shadow,
-              glass sheen; kicker + headline on the grid; callouts with leader lines pinned
+              beats), bezel highlight that follows the tilt, a backlight bloom on a deeper plane
+              (parallax against the turn), contact + ambient shadow cast away from the light,
+              glass sheen; kicker + headline on the grid; callouts with elbow leader lines pinned
               to points on the screen (they track the 3D tilt) and kept inside the safe area.
     features  one feature per `per` beats (default 2b): a full-bleed colour panel with a large
-              icon, the label at the title role (126 px) and a body line; progress segments.
+              glass icon tile, the label at the display role (one size fitted for all items) and
+              a body line on the off-beat in the lower third; progress segments.
               The v0.1 card grid is still available with "layout": "grid" (or "columns").
-    cta       headline + full-width pill button that pulses on every beat (spring landing one
-              frame after the kick), a touch that presses it on the downbeat (`tap_at`, default
-              the first bar line >= 2 beats in) with a click SFX, optional `done` label morph.
+    cta       headline + optional star `proof` row, a full-width pill button in the thumb zone that
+              pulses on every beat (spring landing one frame after the kick), a touch that presses
+              it in place on the downbeat (`tap_at`, default the first bar line >= 2 beats in) with
+              a click SFX, optional `done` label morph; before a closing circle wipe the copy
+              leaves line by line just ahead of the circle's edge.
     brand     end card: app icon, wordmark at the display role (224 px, wght 700) revealed by
-              a travelling mask bar, tagline, URL and store badges on the bottom safe line.
+              a travelling mask bar, tagline, URL and store badges on the bottom safe line; the
+              beat rings fade out before the top safe line.
 """
 from __future__ import annotations
 
@@ -325,8 +330,9 @@ def draw_phone(ctx: Ctx, cx: float, cy: float, pw: float, screen: str, ui: dict,
 class Device(Scene):
     """Hero device shot. A phone at `height` of the frame (0.70) springs up from below and turns
     in yaw from yaw[0] to yaw[1] (in_out_quint over `tilt`, default 4b), then eases back half
-    way over the rest of the shot; the bezel highlight and glass sheen follow the tilt; a soft
-    contact + ambient shadow sits under it. Above it: an optional tracked `kicker`, the
+    way over the rest of the shot; the bezel highlight and glass sheen follow the tilt; an accent
+    backlight on a deeper plane drifts against the turn, and the contact + ambient shadow falls
+    away from the light. Above it: an optional tracked `kicker`, the
     `headline` at the headline role (168 px, 700) flush-left on the grid, and `sub` set as a
     right-aligned standfirst. `callouts` ({text, icon, side, y, x, dy, color}) pop in on the
     beat (`first_callout`, `callout_gap`): a pill (spring) inside the safe area with a leader
@@ -449,13 +455,24 @@ class Device(Scene):
         m = D.persp3d(cx, dcy, math.radians(pitch), math.radians(yaw), 0.0, dist=1500 * ctx.s, scale=scale)
         M = _m44_np(m)
         light = E.clamp(yaw / 14.0, -1.0, 1.0)
-        # shadows (in 3D so they turn with the device): ambient + contact
+        # backlight: a soft accent bloom on a deeper plane, so it rises slower than the phone and
+        # drifts against the turn (parallax); a cooler accent2 rim glow sits on the lit side
+        bk = E.clamp(1.0 - rise * 1.4)
+        if bk > 0:
+            gx, gy = cx - light * pw * 0.22, cy + y_off * 0.55 + fy * 0.4 - ph * 0.06
+            c.drawCircle(gx, gy, pw * 1.5, _shade(D.radial_grad(gx, gy, pw * 1.5, [
+                ctx.pal("accent", 0.6 * bk), ctx.pal("accent", 0.34 * bk), ctx.pal("accent", 0.0)], [0.0, 0.42, 1.0])))
+            rx, ry = cx + light * pw * 0.62, gy - ph * 0.12
+            c.drawCircle(rx, ry, pw * 0.7, _shade(D.radial_grad(rx, ry, pw * 0.7, [
+                ctx.pal("accent2", 0.3 * bk * abs(light)), ctx.pal("accent2", 0.0)])))
+        # shadows (in 3D so they turn with the device): ambient + contact, cast away from the light
+        sx_ = -light * pw * 0.07
         c.save()
         c.concat(m)
         r = pw * 0.16
-        D.rrect(c, cx - pw / 2 + pw * 0.05, dcy - ph / 2 + ph * 0.05, pw, ph, r,
-                D.paint(ctx.pal("#000000", 0.55), blur=pw * 0.1))
-        D.rrect(c, cx - pw / 2 + pw * 0.015, dcy - ph / 2 + ph * 0.012, pw, ph, r,
+        D.rrect(c, cx - pw / 2 + pw * 0.05 + sx_, dcy - ph / 2 + ph * 0.05, pw, ph, r,
+                D.paint(ctx.pal("#000000", 0.6), blur=pw * 0.11))
+        D.rrect(c, cx - pw / 2 + pw * 0.015 + sx_ * 0.3, dcy - ph / 2 + ph * 0.012, pw, ph, r,
                 D.paint(ctx.pal("#000000", 0.45), blur=pw * 0.025))
         scroll = float(self.p["scroll"] or 0) * g.u * E.in_out_quint(E.clamp((lt - 2 * bl) / max(self.dur - 3 * bl, bl)))
         if isinstance(self.p["scroll"], (int, float)) and 0 < float(self.p["scroll"]) <= 1.0:
@@ -500,9 +517,13 @@ class Device(Scene):
         ay = by + bh / 2
         lu = E.out_expo(E.clamp((u_t - 0.25 * bl) / (0.5 * bl)))  # draws once the pill is out
         col = co.get("color", "accent")
-        lx, ly = ax + (px_ - ax) * lu, ay + (py_ - ay) * lu
-        if lu > 0:
-            c.drawLine(ax, ay, lx, ly, D.paint(ctx.pal("ink", 0.9), stroke=g.bl(0.4)))
+        if lu > 0:  # an elbow leader: a short level run out of the pill, then straight to the point
+            sgn = 1.0 if px_ >= ax else -1.0
+            kx = ax + sgn * min(abs(px_ - ax) * 0.45, g.bl(5))
+            lead_ = D.partial_path(D.polyline([(ax, ay), (kx, ay), (px_, py_)]), lu)
+            c.drawPath(lead_, D.paint(ctx.pal("#000000", 0.35), stroke=g.bl(1.0), blur=g.bl(0.6)))
+            c.drawPath(lead_, D.paint(ctx.pal("ink", 0.92), stroke=g.bl(0.4)))
+            c.drawCircle(ax, ay, g.bl(0.75), D.paint(ctx.pal("ink")))
         if lu > 0.6:
             k = E.out_expo(E.clamp((lu - 0.6) / 0.4))
             ring = (u_t / bl) % 1.0
@@ -538,8 +559,8 @@ FEATURE_COLORS = ("accent", "accent2", "pos", "neg")
 @register("features")
 class Features(Scene):
     """Features, one at a time: every `per` beats (default 2b) a full-bleed colour panel wipes in
-    from the right with a large icon, and the label (title role, 126 px) + body line rise in
-    under it on the grid; the outgoing label leaves upward (in_quart). `heading` becomes the
+    from the right with a large glass icon tile, and the label (display role, one size fitted
+    across all items) + body line (on the off-beat) rise in under it on the grid; the outgoing label leaves upward (in_quart). `heading` becomes the
     panel kicker with a 01/04 counter; progress segments sit on the bottom safe line.
     Items: {icon, title, text, color}. `layout: "grid"` (or `columns` > 0) keeps the v0.1 cards."""
     defaults = {"heading": "", "items": [], "per": "2b", "stagger": "1/2b", "first": 0.0, "columns": 0,
@@ -586,7 +607,7 @@ class Features(Scene):
             reveal = 1.0 if i == 0 else E.out_expo(E.clamp(u))
             self._panel(ctx, g, items[i], i, len(items), lt - i * per, reveal, panel_w, panel_h, per, bl)
         # text block
-        tr, br = T["title"], T["body"]
+        tr, br = T["display"], T["body"]
         for i in (cur - 1, cur, cur + 1):
             if not 0 <= i < len(items):
                 continue
@@ -598,22 +619,23 @@ class Features(Scene):
             it = items[i]
             x = g.x0 if ctx.portrait else ctx.W * 0.5 + g.margin
             mw = g.content_w if ctx.portrait else ctx.W * 0.5 - 2 * g.margin
-            top = panel_h + g.bl(12) if ctx.portrait else g.anchor_y
-            # the label lands on the weight axis (wght 500 -> 700 with its rise) and its tracking
-            # opens by 0.03 em over its two beats, so the held word keeps breathing
+            top = panel_h + g.bl(10) if ctx.portrait else g.anchor_y
+            # the label is set at one display size shared by every feature (the largest that fits the
+            # longest label, up to 224 px), lands on the weight axis (wght 500 -> 700 with its rise)
+            # and its tracking opens by 0.02 em over its two beats, so the held word keeps breathing
             wt = 500 + 200 * E.out_quint(E.clamp(u_in))
-            tf = L.fit_role(ctx, tr, it.get("title", ""), mw, weight=int(round(wt)))
-            tk = tr.tk(ctx) + 0.03 * E.out_sine(E.clamp(li / per))
+            tf = tr.font(ctx, weight=int(round(wt)), size=self._label_px(ctx, mw))
+            tk = tr.tk(ctx) + 0.02 * E.out_sine(E.clamp(li / per))
             blk = D.set_lines(tf, [it.get("title", "")], x, top, tr.leading, tr.tk(ctx), "left")
             ln = blk.lines[0]
             _mask_line(ctx, ln.text, ln.x, ln.baseline, tf, ctx.pal("ink"), u_in, u_out, "left", tk)
             if it.get("text"):
                 bf = br.font(ctx, weight=500)
                 bls = D.wrap(bf, it["text"], mw, br.tk(ctx), style="balance")[:2]
-                bb = D.set_lines(bf, bls, x, blk.bottom + g.bl(5), br.leading, br.tk(ctx), "left")
-                for j, bln in enumerate(bb.lines):
-                    _mask_line(ctx, bln.text, bln.x, bln.baseline, bf, ctx.pal("muted"),
-                               (li - (0.25 + 0.125 * j) * bl) / (0.75 * bl), u_out, "left", br.tk(ctx))
+                bb = D.set_lines(bf, bls, x, blk.bottom + g.bl(4), br.leading, br.tk(ctx), "left")
+                for j, bln in enumerate(bb.lines):  # the body line lands on the off-beat ("and")
+                    _mask_line(ctx, bln.text, bln.x, bln.baseline, bf, ctx.pal("ink", 0.78),
+                               (li - (0.5 + 0.125 * j) * bl + ctx.frame) / (0.75 * bl), u_out, "left", br.tk(ctx))
         # progress segments on the bottom safe line
         n = len(items)
         gap = g.gutter
@@ -626,6 +648,16 @@ class Features(Scene):
             f = E.clamp((lt - i * per) / per)
             if f > 0:
                 D.rrect(ctx.c, x, y, sw * f, h, h / 2, D.paint(ctx.pal("ink" if f < 1 else "accent", 0.95)))
+
+    def _label_px(self, ctx: Ctx, mw: float) -> float:
+        """One label size for every feature: the display role (224 px), shrunk so the widest label fits."""
+        key = (ctx.W, ctx.H, round(mw, 1))
+        cache: dict[tuple[int, int, float], float] = self.__dict__.setdefault("_label_cache", {})
+        if key not in cache:
+            r = T["display"]
+            cache[key] = min([L.fit_role(ctx, r, str(it.get("title", "")), mw, weight=700).getSize()
+                              for it in self.p["items"]] or [r.px(L.grid(ctx))])
+        return cache[key]
 
     def _panel(self, ctx: Ctx, g: L.Grid, it: dict, i: int, n: int, li: float, reveal: float, pw: float, ph: float,
                per: float, bl: float) -> None:
@@ -649,7 +681,8 @@ class Features(Scene):
         size = min(pw * 0.5, ph * 0.46)
         # two quiet orbit rings + a ripple that leaves the icon on every beat and runs out at constant speed
         for ri in range(2):
-            c.drawCircle(rcx, icy, size * (0.95 + 0.4 * ri), D.paint(ctx.pal(ink, 0.08 - 0.03 * ri), stroke=g.bl(0.4)))
+            c.drawCircle(rcx, icy, size * (0.95 + 0.4 * ri), D.paint(ctx.pal("#ffffff", 0.14 - 0.05 * ri),
+                                                                     stroke=g.bl(0.4)))
         lb = li / (0.5 * bl)  # a ripple every eighth note, each living three eighths
         for kb in range(math.floor(lb) - 2, math.floor(lb) + 1):
             ph_ = (lb - kb) / 3.0
@@ -657,7 +690,7 @@ class Features(Scene):
                 continue
             ex = rcx + g.bl(13) * (1 - 2 * E.clamp(kb * 0.5 * bl / per)) * side  # where the icon was at emission
             rr = size * 0.55 + ph_ * size * 0.9
-            c.drawCircle(ex, icy, rr, D.paint(ctx.pal(ink, 0.5 * (1 - ph_)), stroke=g.bl(1.5)))
+            c.drawCircle(ex, icy, rr, D.paint(ctx.pal("#ffffff", 0.42 * (1 - ph_) ** 1.5), stroke=g.bl(1.5)))
         # icon tile in 3D: scales in (out_expo), turns steadily on yaw across its two beats (a slow
         # product spin), kicks on every beat, leaves (in_expo) at the end of its window
         u_in = E.out_expo(E.clamp((li + ctx.frame) / (0.75 * bl)))
@@ -672,13 +705,19 @@ class Features(Scene):
         c.translate(icx, icy)
         c.rotate(rot)
         c.scale(k, k)
+        # an opaque light-glass app tile (same on every panel, so a light panel never reads murky): a
+        # deep shadow in the panel's own hue, a top-lit face, a bright rim and the icon in the deep hue
         tile = size * 1.04
-        D.rrect(c, -tile / 2, -tile / 2 + g.bl(4), tile, tile, tile * 0.26, D.paint(ctx.pal("#000000", 0.35),
-                                                                                     blur=g.bl(5)))
+        deep = D.mix_rgb(rgb, ctx.pal.rgb("bg"), 0.62)
+        D.rrect(c, -tile / 2, -tile / 2 + g.bl(6), tile, tile, tile * 0.26, D.paint(D.argb(deep, 0.55),
+                                                                                     blur=g.bl(7)))
         D.rrect(c, -tile / 2, -tile / 2, tile, tile, tile * 0.26,
-                _shade(D.linear_grad(0, -tile / 2, 0, tile / 2, [ctx.pal(ink, 0.22), ctx.pal(ink, 0.08)])))
-        D.rrect(c, -tile / 2, -tile / 2, tile, tile, tile * 0.26, D.paint(ctx.pal(ink, 0.35), stroke=g.bl(0.4)))
-        D.icon(c, it.get("icon", "star"), 0, 0, size * 0.62, ctx.pal(ink, max(0.0, 1 - u_out)), sw=size * 0.05)
+                _shade(D.linear_grad(0, -tile / 2, 0, tile / 2, [ctx.pal("#ffffff"),
+                                                                  D.argb(D.mix_rgb((255, 255, 255), rgb, 0.22))])))
+        D.rrect(c, -tile / 2, -tile / 2, tile, tile * 0.5, tile * 0.26,
+                _shade(D.linear_grad(0, -tile / 2, 0, 0, [ctx.pal("#ffffff", 0.9), ctx.pal("#ffffff", 0.0)])))
+        D.rrect(c, -tile / 2, -tile / 2, tile, tile, tile * 0.26, D.paint(ctx.pal("#ffffff", 0.9), stroke=g.bl(0.4)))
+        D.icon(c, it.get("icon", "star"), 0, 0, size * 0.6, D.argb(deep, max(0.0, 1 - u_out)), sw=size * 0.055)
         c.restore()
         # panel kicker + counter on the top safe line
         kr = T["kicker"]
@@ -766,8 +805,12 @@ class CTA(Scene):
     (spring landing one frame after the kick, with a ring wave), a touch that presses it on the
     downbeat `tap_at` (click SFX + ripple; the label morphs to `done` if set), a `note` under the
     button and the `sub` line (platforms) on the bottom safe line. `lockup` (product name) puts a
-    small app icon (`mark`) + name on the top safe line so the block spans the frame."""
+    small app icon (`mark`) + name on the top safe line so the block spans the frame. `proof` (e.g.
+    "4.9 · 20k ratings") sets a five-star row under the headline; the button then sits in the thumb
+    zone above the note. Before a closing circle wipe the copy leaves line by line just ahead of
+    the circle's edge."""
     defaults = {"kicker": "", "headline": "Try it free", "button": "Get the app", "sub": "", "note": "", "done": "",
+                "proof": "",
                 "tap_at": None, "enter": "1b", "pulse": 0.035, "lockup": "", "mark": "spark", "push": 0.04,
                 "exit": True}
     time_params = ("enter",)
@@ -790,6 +833,8 @@ class CTA(Scene):
                 Cue("hit", tap, data={"strength": 0.35})]
 
     def layout(self, ctx: Ctx) -> dict[str, Any]:
+        """Kicker + headline on the shared anchor, an optional proof row under it; the button sits in the
+        thumb zone, bottom-anchored over the note and the sub rule, so the block spans the safe area."""
         g = _pin(ctx)
         hr, kr = T["headline"], T["kicker"]
         hf = L.fit_role(ctx, hr, self.p["headline"], g.head_w)
@@ -799,18 +844,62 @@ class CTA(Scene):
         top = g.anchor_y - kick_h
         blk = D.set_lines(hf, lines, g.x0, top + kick_h, hr.leading, hr.tk(ctx), "left")
         bh = g.bl(24)
-        by = blk.bottom + g.bl(10)
-        # the pill is inset by the ring wave's reach so the beat pulse and the wave stay inside the margins
         reach = g.bl(RING_REACH)
-        return {"g": g, "hf": hf, "blk": blk, "kf": kf, "top": top, "reach": reach,
+        nf = T["body"].font(ctx, weight=500)
+        rule_y = g.safe_bottom - g.bl(6)
+        note_base = rule_y - g.bl(9)
+        note_top = note_base - D.cap_height(nf)
+        proof_base = blk.bottom + g.bl(11) if self.p["proof"] else blk.bottom
+        low = (note_top if self.p["note"] else rule_y) - g.bl(7) - reach - bh
+        by = max(low, proof_base + g.bl(10) + reach)
+        return {"g": g, "hf": hf, "blk": blk, "kf": kf, "top": top, "reach": reach, "nf": nf, "rule_y": rule_y,
+                "note_base": note_base, "proof_base": proof_base,
                 "button": skia.Rect.MakeXYWH(g.x0 + reach, by, g.content_w - 2 * reach, bh)}
 
-    def _exit(self, lt: float, bl: float, order: int) -> float:
-        """Exit progress (0..1) of the copy: it leaves upward through its masks from 1.5 beats before the
-        cut, staggered by 1/16 beat, and is gone before the circle wipe opens from the button (half a beat
-        before the cut), so only the button meets the end card."""
+    def _wipe(self, ctx: Ctx) -> tuple[Any, float, float] | None:
+        """The circle wipe that closes this scene, as (boundary, centre x, centre y) in frame px."""
+        film = ctx.film
+        if film is None:
+            return None
+        for b in getattr(film, "boundaries", []):
+            if b.a is self and b.kind == "wipe" and str(b.params.get("shape", "rect")) == "circle" and b.dur > 0:
+                at = b.params.get("at", [0.5, 0.5])
+                return b, film.W * float(at[0]), film.H * float(at[1])
+        return None
+
+    def covered_at(self, ctx: Ctx, g: L.Grid, r: skia.Rect) -> float | None:
+        """Scene-local time at which the closing circle wipe's edge reaches the nearest point of r (world
+        rect, mapped to the screen through the pinned grid); None without a circle wipe."""
+        w = self._wipe(ctx)
+        if w is None:
+            return None
+        b, cx, cy = w
+        if isinstance(g, _Pinned):
+            def sx(x: float) -> float:
+                return (x - g.W / 2) * g.k + g.W / 2 + g.ox
+
+            def sy(y: float) -> float:
+                return (y - g.H / 2) * g.k + g.H / 2 + g.oy
+            r = skia.Rect(sx(r.left()), sy(r.top()), sx(r.right()), sy(r.bottom()))
+        nx, ny = min(max(cx, r.left()), r.right()), min(max(cy, r.top()), r.bottom())
+        rmax = math.hypot(max(cx, ctx.W - cx), max(cy, ctx.H - cy)) * 1.08  # transitions._mask_path
+        target = math.hypot(nx - cx, ny - cy) / max(rmax, 1e-6)
+        lo, hi = 0.0, 1.0
+        for _ in range(32):  # the wipe edge runs in_out_cubic over the window
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if E.in_out_cubic(mid) < target else (lo, mid)
+        return float(b.t0) + lo * float(b.dur) - self.start
+
+    def _exit(self, lt: float, bl: float, order: int, cover: float | None = None) -> float:
+        """Exit progress (0..1) of a piece of copy. With a closing circle wipe (`cover` = the local time its
+        edge reaches the piece) each piece leaves upward through its mask over 3/8 beat and is gone 1/8 beat
+        before the edge arrives: the circle swallows the frame line by line and never meets live copy.
+        Without one, the copy leaves from 1.5 beats before the cut, staggered by 1/16 beat."""
         if not self.p["exit"]:
             return 0.0
+        if cover is not None:
+            end = cover - 0.125 * bl
+            return E.clamp((lt - (end - 0.375 * bl)) / (0.375 * bl))
         return E.clamp((lt - (self.dur - 1.5 * bl) - order * 0.0625 * bl) / (0.375 * bl))
 
     def draw(self, ctx: Ctx) -> None:
@@ -819,14 +908,18 @@ class CTA(Scene):
         g, blk, br_ = lay["g"], lay["blk"], lay["button"]
         bl = max(ctx.beat_len, 1e-3)
         hr, kr = T["headline"], T["kicker"]
+
+        def cov(r: skia.Rect) -> float | None:
+            return self.covered_at(ctx, g, r)
+
         if self.p["lockup"]:
-            ux = self._exit(lt, bl, 0)
+            ux = self._exit(lt, bl, 0, cov(skia.Rect.MakeXYWH(g.x0, g.safe_top, g.content_w * 0.5, g.bl(12))))
             _lockup(ctx, g, str(self.p["lockup"]), str(self.p["mark"]),
                     E.out_expo(E.clamp((lt + ctx.frame) / (0.75 * bl))) * (1 - E.in_quart(ux)))
         if self.p["kicker"]:
             kf = lay["kf"]
             ky = lay["top"] + D.cap_height(kf)
-            ux = self._exit(lt, bl, 1)
+            ux = self._exit(lt, bl, 1, cov(skia.Rect(g.x0, ky - D.cap_height(kf), g.x1, ky)))
             rule = g.col_w * E.out_expo(E.clamp(lt / (0.75 * bl))) * (1 - E.in_quart(ux))
             c.drawRect(skia.Rect.MakeXYWH(g.x0, ky - D.cap_height(kf) / 2 - g.bl(0.25), rule, g.bl(0.5)),
                        D.paint(ctx.pal("accent")))
@@ -834,20 +927,40 @@ class CTA(Scene):
                        (lt + ctx.frame) / (0.75 * bl), ux, "left", kr.tk(ctx))
         # headline: a slow push on its cap-top / left corner over the shot (never past the right margin)
         if blk.lines:
-            widest = max(D.text_w(lay["hf"], ln.text, hr.tk(ctx)) for ln in blk.lines)
+            hf = lay["hf"]
+            widest = max(D.text_w(hf, ln.text, hr.tk(ctx)) for ln in blk.lines)
             room = max(0.0, (g.x1 - g.x0) / max(widest, 1.0) - 1.0)
             hk = 1.0 + min(float(self.p["push"]), room) * E.out_sine(E.clamp(lt / max(self.dur, 1e-3)))
-            px_, py_ = g.x0, blk.lines[0].baseline - D.cap_height(lay["hf"])
+            px_, py_ = g.x0, blk.lines[0].baseline - D.cap_height(hf)
             c.save()
             c.translate(px_, py_)
             c.scale(hk, hk)
             c.translate(-px_, -py_)
             for i, ln in enumerate(blk.lines):
-                _mask_line(ctx, ln.text, ln.x, ln.baseline, lay["hf"], ctx.pal("ink"),
-                           (lt + ctx.frame - i * 0.25 * bl) / bl, self._exit(lt, bl, 2 + i), "left", hr.tk(ctx))
+                lr = skia.Rect(g.x0, ln.baseline - D.cap_height(hf), g.x0 + widest * hk, ln.baseline)
+                _mask_line(ctx, ln.text, ln.x, ln.baseline, hf, ctx.pal("ink"),
+                           (lt + ctx.frame - i * 0.25 * bl) / bl, self._exit(lt, bl, 2 + i, cov(lr)), "left", hr.tk(ctx))
             c.restore()
-        # button
         enter = float(self.p["enter"])
+        # proof row: five stars land on the 16ths after the button, then the rating line rises
+        if self.p["proof"]:
+            pb = lay["proof_base"]
+            sz = g.bl(6)
+            mr = T["kicker"]
+            pf = mr.font(ctx, weight=600)
+            prow = skia.Rect(g.x0, pb - sz, g.x1, pb)
+            ux = self._exit(lt, bl, 3, cov(prow))
+            for js in range(5):
+                su = E.out_expo(E.clamp((lt - enter + ctx.frame - js * 0.25 * bl) / (0.5 * bl))) * (1 - E.in_quart(ux))
+                if su <= 0:
+                    continue
+                scx = g.x0 + sz / 2 + js * (sz + g.bl(1.5))
+                D.icon(c, "star", scx, pb - sz / 2 + (1 - su) * g.bl(2), sz * (0.6 + 0.4 * su),
+                       ctx.pal("accent2", su))
+            tx = g.x0 + 5 * (sz + g.bl(1.5)) + g.bl(2)
+            _mask_line(ctx, mr.text(str(self.p["proof"])), tx, pb - (sz - D.cap_height(pf)) / 2, pf,
+                       ctx.pal("ink", 0.86), (lt - enter - 1.25 * bl + ctx.frame) / (0.75 * bl), ux, "left", mr.tk(ctx))
+        # button
         tap = self.tap()
         e = _spring(1.2 * bl, 0.2).value(max(lt - enter + 0.5 * bl, 0.0)) if lt > enter - 0.5 * bl else 0.0
         if e > 0:
@@ -873,7 +986,8 @@ class CTA(Scene):
             c.translate(bcx, bcy)
             c.scale(k, k)
             c.translate(-bcx, -bcy)
-            D.rrect(c, bx, by + g.bl(3), bw, bh, bh / 2, D.paint(ctx.pal("accent", 0.45), blur=g.bl(6)))
+            # glow under the pill breathes with the beat (the CTA's weight in the frame)
+            D.rrect(c, bx, by + g.bl(3), bw, bh, bh / 2, D.paint(ctx.pal("accent", 0.45 + 0.25 * pulse), blur=g.bl(6)))
             # light end of the gradient under the label, deep end under the dark action disc
             D.rrect(c, bx, by, bw, bh, bh / 2, _shade(D.linear_grad(bx, by, bx + bw, by + bh,
                                                                      [ctx.pal("accent2"), ctx.pal("accent")])))
@@ -909,37 +1023,40 @@ class CTA(Scene):
             D.icon(c, "check" if done else "arrow", icx, bcy, ir * 1.1, ctx.pal("ink" if ink == "ink_dark" else "accent"),
                    sw=ir * 0.14)
             c.restore()
-            # touch: glides in over the beat before the tap, presses, ripples, lifts away
-            if tap - bl <= lt <= tap + 1.5 * bl:
+            # touch: a fingertip settles onto the glass in place over the half beat before the tap (it
+            # shrinks from a soft out-of-focus disc), presses, ripples, then fades where it is. It never
+            # travels, so it never crosses the copy under the button.
+            if tap - 0.5 * bl <= lt <= tap + bl:
                 tx, ty = bcx + bw * 0.18, bcy + bh * 0.1
-                u = E.out_quint(E.clamp((lt - (tap - bl)) / (bl - ctx.frame)))
-                v = E.in_quart(E.clamp((lt - tap - 0.5 * bl) / bl))
-                fx = tx + (1 - u) * g.bl(30) + v * g.bl(18)
-                fy = ty + (1 - u) * g.bl(50) + v * g.bl(40)
-                rad = g.bl(4.5) * (1 - 0.18 * press)
-                a = (1 - v) * E.clamp(u * 2)
+                u = E.out_quint(E.clamp((lt - (tap - 0.5 * bl)) / (0.5 * bl - ctx.frame)))
+                v = E.out_quart(E.clamp((lt - tap - 0.25 * bl) / (0.5 * bl)))
+                rad = g.bl(4.5) * (1.6 - 0.6 * u) * (1 - 0.18 * press) * (1 + 0.25 * v)
+                a = E.clamp(u * 1.5) * (1 - v)
                 if lt >= tap:
                     rr = E.out_expo(E.clamp((lt - tap) / bl))
                     c.drawCircle(tx, ty, g.bl(4) + g.bl(16) * rr, D.paint(ctx.pal("#ffffff", 0.6 * (1 - rr)),
                                                                           stroke=g.bl(0.5)))
-                c.drawCircle(fx, fy + g.bl(1), rad, D.paint(ctx.pal("#000000", 0.3 * a), blur=g.bl(1.5)))
-                c.drawCircle(fx, fy, rad, D.paint(ctx.pal("#ffffff", 0.9 * a)))
-        y = br_.bottom() + g.bl(8)
+                if a > 0.002:
+                    c.drawCircle(tx, ty + g.bl(1), rad, D.paint(ctx.pal("#000000", 0.3 * a), blur=g.bl(1.5)))
+                    c.drawCircle(tx, ty, rad, D.paint(ctx.pal("#ffffff", 0.85 * a), blur=g.bl(1.2) * (1 - u)))
         if self.p["note"]:
             nr = T["body"]
-            nf = nr.font(ctx, weight=500)
-            yb = y + D.cap_height(nf)
-            _mask_line(ctx, self.p["note"], g.x0, yb, nf, ctx.pal("muted"), (lt - enter - 0.5 * bl) / bl,
-                       self._exit(lt, bl, 3), "left", nr.tk(ctx))
+            nf = lay["nf"]
+            yb = lay["note_base"]
+            ux = self._exit(lt, bl, 3, cov(skia.Rect(g.x0, yb - D.cap_height(nf), g.x1, yb)))
+            _mask_line(ctx, self.p["note"], g.x0, yb, nf, ctx.pal("muted"), (lt - enter - 0.5 * bl) / bl, ux, "left",
+                       nr.tk(ctx))
         if self.p["sub"]:
+            # the sub line and its rule are there from the first frame (the frame is never empty while
+            # the headline builds), drawn on from the left over the first beat
             mr = T["meta"]
             mf = mr.font(ctx, weight=600)
-            ux = self._exit(lt, bl, 4)
-            u = E.out_expo(E.clamp((lt - enter - bl) / bl)) * (1 - E.in_quart(ux))
-            c.drawRect(skia.Rect.MakeXYWH(g.x0, g.safe_bottom - g.bl(6), g.content_w * u, max(1.0, g.bl(0.25))),
+            ux = self._exit(lt, bl, 4, cov(skia.Rect(g.x0, lay["rule_y"], g.x1, g.safe_bottom)))
+            u = E.out_expo(E.clamp((lt + ctx.frame) / bl)) * (1 - E.in_quart(ux))
+            c.drawRect(skia.Rect.MakeXYWH(g.x0, lay["rule_y"], g.content_w * u, max(1.0, g.bl(0.25))),
                        D.paint(ctx.pal("ink", 0.3)))
             sb = g.safe_bottom - mf.getMetrics().fDescent  # descenders end on the safe line
-            _mask_line(ctx, self.p["sub"], g.x0, sb, mf, ctx.pal("ink", 0.85), (lt - enter - bl) / bl, ux,
+            _mask_line(ctx, self.p["sub"], g.x0, sb, mf, ctx.pal("ink", 0.85), (lt + ctx.frame) / (0.75 * bl), ux,
                        "left", mr.tk(ctx), floor=g.safe_bottom)
 
 
@@ -951,8 +1068,8 @@ class Brand(Scene):
     """Brand end card: an app icon (gradient tile + `mark` icon name or image path) lands, then
     the wordmark (`text`, display role 224 px, `weight` 700) is revealed by an accent mask bar
     that travels across it (out_quint from the scene start) and lands on the beat `hit_at` (logo hit + music stop), a sheen
-    sweeps the wordmark, `tagline` and `url` rise in, and `badges` (["App Store", ...]) sit
-    on the bottom safe line from beat 2."""
+    sweeps the wordmark, `tagline` and `url` rise in, and `badges` (["App Store", ...]) rise out of
+    the bottom safe line as the card opens (a glint on beats 2 and 3)."""
     defaults = {"text": "brand", "tagline": "", "url": "", "mark": "spark", "weight": 700, "size": None,
                 "badges": [], "badge_kicker": "Download on", "hit_at": "1b", "stop_music": True, "push": 0.03}
     time_params = ("hit_at",)
@@ -1001,14 +1118,17 @@ class Brand(Scene):
         if held:  # the hold keeps time: a ring leaves the icon on every 8th after the hit and runs out over 1.5 beats
             h8 = (lt - h) / (0.5 * bl)
             c.save()  # the rings radiate above the wordmark and never run through the type
-            c.clipRect(skia.Rect(0, 0, ctx.W, y - lay["cap"] - g.bl(6)))
+            c.clipRect(skia.Rect(0, g.safe_top, ctx.W, y - lay["cap"] - g.bl(6)))  # and never across the top safe line
             for k8 in range(math.floor(h8) - 2, math.floor(h8) + 1):
                 ph = (h8 - k8) / 3.0
                 if k8 < 0 or not 0.0 <= ph < 1.0:
                     continue
                 grow = g.bl(2) + g.bl(20) * ph
+                room = E.clamp((iy - isz / 2 - grow - g.bl(0.75) - g.safe_top) / g.bl(6))  # fade out before the safe line
+                if room <= 0:
+                    continue
                 D.rrect(c, ix - isz / 2 - grow, iy - isz / 2 - grow, isz + 2 * grow, isz + 2 * grow,
-                        isz * 0.24 + grow, D.paint(ctx.pal("accent2", 0.7 * (1 - ph)), stroke=g.bl(1.5)))
+                        isz * 0.24 + grow, D.paint(ctx.pal("accent2", 0.7 * (1 - ph) * room), stroke=g.bl(1.5)))
             c.restore()
         if e > 0:
             k = (0.6 + 0.4 * e) * (1 + 0.05 * kick)
@@ -1082,7 +1202,7 @@ class Brand(Scene):
                        (lt - h + 0.5 * bl) / (0.75 * bl), 0.0, "center", br.tk(ctx))
         if self.p["url"]:
             mr = T["meta"]
-            _mask_line(ctx, self.p["url"], g.cx, ty + g.bl(9), mr.font(ctx, weight=600), ctx.pal("accent"),
+            _mask_line(ctx, self.p["url"], g.cx, ty + g.bl(9), mr.font(ctx, weight=600), ctx.pal("accent2"),
                        (lt - h + 0.25 * bl) / (0.75 * bl), 0.0, "center", mr.tk(ctx))
         # store badges on the bottom safe line
         badges = list(self.p["badges"])[:2]
@@ -1100,7 +1220,7 @@ class Brand(Scene):
             c.save()  # the badges rise out of the bottom safe line (a mask), never below it
             c.clipRect(skia.Rect(0, 0, ctx.W, g.safe_bottom + g.bl(0.15)))  # + half the outline
             for j, name in enumerate(badges):
-                ub = E.out_quint(E.clamp((lt - 0.5 * bl + ctx.frame - j * 0.125 * bl) / (0.75 * bl)))
+                ub = E.out_quint(E.clamp((lt + ctx.frame - j * 0.125 * bl) / (0.75 * bl)))  # in as the card opens
                 if ub <= 0:
                     continue
                 bx = bx0 + j * (bw + g.gutter * 2)
