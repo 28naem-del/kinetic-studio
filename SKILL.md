@@ -1,6 +1,6 @@
 ---
 name: kinetic-studio
-description: Turn a short brief into a finished, beat-synced motion-graphics video (MP4, 9:16 / 16:9 / 1:1 / 4:5, 24-60 fps, optional 4K) with procedural music and sound effects, mixed to -14 LUFS, and an automatic quality audit. Five modes - kinetic type teaser, explainer, product promo, data story, social quote or karaoke clip. Use when someone asks for a reel, short, teaser, explainer, promo, stats video or quote video and no camera footage is needed. Runs locally (Python, Skia, ffmpeg); no paid API, no account, no cloud call.
+description: Turn a short brief into a finished, beat-synced motion-graphics video (MP4, 9:16 / 16:9 / 1:1 / 4:5, 24-60 fps, optional 4K) with procedural music and sound effects, mixed to -14 LUFS, and an automatic quality audit. Five modes - kinetic type teaser, explainer, product promo, data story, social quote or karaoke clip. Use when someone asks for a reel, short, teaser, explainer, promo, stats video or quote video and no camera footage is needed. The core renderer runs locally (Python, Skia, ffmpeg) without paid APIs, accounts or cloud calls; optional swap sends chosen video and character inputs to a configured ComfyUI backend, only for inputs you agree to share.
 license: MIT
 compatibility: Python 3.10+ and ffmpeg/ffprobe with libx264 on PATH. Works through MCP (stdio or HTTP), the command line or Python.
 metadata:
@@ -135,7 +135,7 @@ Transitions (per scene, on the incoming one): `cut`, `flash`, `cross` (alias `fa
 (spec valid, video rendered and audited). On failure there is `error: {code, message, hint}` and the
 MCP result has `isError: true`; validation problems are a normal result with `ok: false` and an
 `errors` list. Codes: `USAGE`, `MODE_UNKNOWN`, `DIR_NOT_EMPTY`, `FILE_NOT_FOUND`, `SPEC_INVALID`,
-`SPEC_NOT_FOUND`, `SPEC_PARSE`, `RENDER_FAILED`, `MISSING_TOOL`, `INVALID_ARGUMENTS`, `INTERNAL_ERROR`.
+`SPEC_NOT_FOUND`, `SPEC_PARSE`, `RENDER_FAILED`, `AUDIT_FAILED`, `MISSING_TOOL`, `INVALID_ARGUMENTS`, `INTERNAL_ERROR`.
 
 ## Modes
 
@@ -184,6 +184,24 @@ line (`"timing": "beat"`, or per-word `"words": [{"w": "Make", "t": 0.0}, ...]` 
 Presets: `reel` / `story` 1080x1920, `landscape` / `youtube` 1920x1080, `square` 1080x1080,
 `portrait` 1080x1350; `k4` / `--4k` doubles both sides. Frame rates 24, 25, 30, 50, 60. Quality
 `draft` (no motion blur, for checks), `standard` (default), `high`.
+
+### Audit input limits
+
+Audits use **`reference-1080-v2`**. Coded short edge must be >=144 px, long edge <=4096 px, and
+total pixels <=9,000,000. The even analysis grid must have axes 16..512 px, at most 65,536 pixels,
+and fit within the source without upscaling. Tiny or extreme-aspect inputs that violate these
+limits fail with `AUDIT_FAILED` / `unsupported_geometry` (CLI exit 5), not a successful skip.
+Explicit non-unit SAR or nonidentity rotation, including display-matrix rotation, fails with
+`unsupported_display_geometry`; absent/N/A/0:1 SAR is treated as unspecified square pixels.
+A detected decoder failure, partial final frame or fewer than three frames gives `invalid_decode`.
+
+The denoising equation, motion gate 1.75, raw still threshold 0.6, black threshold 10.0 and mode
+thresholds are unchanged. Supported short-edge 1080/default master grids preserve the prior basis;
+non-1080 sampled motion, hold and black-frame metrics can change. Record the report's basis and
+analysis size; keep historical reports. This is not universal perceptual calibration. The bounds
+limit per-frame analysis geometry only, not total runtime/memory for arbitrary video duration.
+Meeting these limits does not waive other quality checks or replace visual/readability/audio review.
+Full policy: `docs/CLI.md`, “Audit input policy and measurement basis”, in the repository.
 
 ## Troubleshooting
 

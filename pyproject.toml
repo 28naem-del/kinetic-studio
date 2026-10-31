@@ -34,6 +34,8 @@ kstudio = "kstudio.cli:main"
 kstudio-mcp = "kstudio.mcp_server:main"
 
 [tool.setuptools]
+# Include the upstream workflow MIT notice in wheels as well as source distributions.
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 packages = ["kstudio", "kstudio.audio", "kstudio.scenes", "kstudio.examples"]
 include-package-data = false
 
@@ -45,9 +47,9 @@ include-package-data = false
 version = { attr = "kstudio.__version__" }
 
 [tool.setuptools.package-data]
-kstudio = ["assets/fonts/*"]
+kstudio = ["assets/fonts/*", "workflows/*.json", "workflows/*.md"]
 "kstudio.examples" = ["*/*.json", "*/*.jsonc", "*/*.js", "*/*.mjs", "*/*.png", "*/*.jpg", "*/*.svg",
-                      "*/*.wav", "*/*.mp3", "*/assets/*"]
+                      "*/*.wav", "*/*.mp3", "*/*.mp4", "*/*.sh", "*/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

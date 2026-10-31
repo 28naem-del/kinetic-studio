@@ -320,7 +320,7 @@ class TypeScale:
     def __getitem__(self, name: str) -> Role:
         return self.roles[name]
 
-    def __contains__(self, name: str) -> bool:
+    def __contains__(self, name: object) -> bool:
         return name in self.roles
 
     def role(self, name_or_size: str | float) -> Role:

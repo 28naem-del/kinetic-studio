@@ -114,6 +114,7 @@ def draw_boundary(film: Film, c: skia.Canvas, b: Boundary, p: float, t: float) -
 
 
 def _a(film: Film, c: skia.Canvas, b: Boundary, t: float, **kw: Any) -> None:
+    assert b.t1 is not None  # Boundary.__post_init__ resolves the window end
     film._draw_scene(c, b.a, t, lt_max=b.a.dur + (b.t1 - b.t), **kw)
 
 

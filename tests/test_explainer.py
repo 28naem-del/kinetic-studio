@@ -200,4 +200,4 @@ def test_legacy_explainer_fields_still_work():
 def test_spec_copy_is_safe():
     src = open(os.path.join(EXAMPLES, "explainer", "spec.json")).read().lower()
     for w in ("mg", "dose", "dosage", "inject", "cure", "treat", "prevents", "reverses"):
-        assert not re.search(r"\b%s\b" % w, src), w
+        assert not re.search(rf"\b{w}\b", src), w

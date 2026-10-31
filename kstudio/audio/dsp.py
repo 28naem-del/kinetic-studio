@@ -275,7 +275,7 @@ def supersaw(f0: float, n: int, cutoff: float | np.ndarray = 4000.0, voices: int
     tabs = wavetables(f0, wave, q, 2)
     out = np.zeros((n, 2), np.float32)
     pos = np.linspace(-1, 1, voices) if voices > 1 else np.zeros(1)
-    for v, p in enumerate(pos):
+    for _v, p in enumerate(pos):
         det = spread * np.sign(p) * abs(p) ** 1.3 + r.uniform(-1.5, 1.5)
         x = osc(f0, n, cutoff, q, wave, cents=det, phase=float(r.uniform()), tables=tabs)
         out += pan(x, float(p * width))

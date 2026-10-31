@@ -23,7 +23,9 @@ Tools -> MCP -> Add MCP Server (HTTP):
 | Name | Kinetic Studio |
 | Server identifier | `kinetic-studio` |
 
-Dify imports the eight tools; use them from an Agent app or an Agent node in a workflow.
+Dify imports nine advertised tools: eight core tools plus `swap`, which requires an optional
+configured ComfyUI backend. Use them from an Agent app or an Agent node in a workflow; only enable
+swap for inputs you agree to send to that server (see [swap](../SWAP.md)).
 
 From a clone: `PYTHONPATH=/path/to/kinetic-studio /path/to/kinetic-studio/.venv/bin/python -m kstudio.mcp_server --http 0.0.0.0:8765`.
 

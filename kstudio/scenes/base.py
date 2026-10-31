@@ -27,7 +27,7 @@ from .. import camera as CAM
 from .. import draw as D
 from .. import ease as E
 from .. import fonts as F
-from ..timeline import Timeline, TimeExprError, is_beat_expr
+from ..timeline import TimeExprError, Timeline, is_beat_expr
 
 # Scene parameters that hold a time in seconds (or a beat expression) relative to the scene.
 TIME_PARAMS: tuple[str, ...] = ("stagger", "per", "first", "grow", "count", "delay", "lead", "tail", "tap_at",
@@ -202,6 +202,7 @@ def _as_rect(r: Any) -> skia.Rect:
 
 
 class Scene:
+    _cam_link: dict[str, Any]  # populated by camera.link_shots before rendering
     type: ClassVar[str] = "scene"
     defaults: ClassVar[dict[str, Any]] = {}
     # extra timing keys (seconds/beat expressions) and beat-count keys for a scene class
@@ -349,7 +350,7 @@ def _paper_image(w: int, h: int, base: tuple[int, int, int], ink: tuple[int, int
     rng = np.random.default_rng(seed)
     f = np.zeros((h, w), np.float32)
     for sigma, amp in ((w / 10, 0.55), (w / 40, 0.3), (1.2, 0.35)):
-        n = rng.normal(0, 1, (h, w)).astype(np.float32)
+        n: np.ndarray = rng.normal(0, 1, (h, w)).astype(np.float32)
         n = cv2.GaussianBlur(n, (0, 0), max(sigma, 0.6))
         f += amp * n / max(float(n.std()), 1e-6)
     f = (f - f.mean()) / max(float(f.std()), 1e-6)

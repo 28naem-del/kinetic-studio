@@ -27,7 +27,7 @@ keeps the install line stable). `kstudio-mcp` is installed with the package.
 | `info <spec> [-v]` | resolved timeline + beat-grid lint | `mode`, `duration`, `bpm`, `scenes[]`, `transitions[]`, `lint[]` |
 | `preview <spec> [-o dir] [--at 1.2,3] [--preset] [--scale] [--quality]` | stills + contact sheet (default dir `<project>/out/preview`) | `stills[]` {t, label, path}, `contact_sheet`, `out_dir`, `seconds`, `summary`, `warnings[]` |
 | `render <spec> [-o out.mp4] [--preset] [--fps] [--quality draft\|standard\|high] [--4k] [--workers] [--fresh] [--snap [beat\|8th\|16th\|bar]] [--no-audit] [-q]` | final MP4 (parallel, resumable) | the build report: `output`, `duration`, `frames`, `size`, `fps`, `render`, `audio`, `mux`, `audit`, `delivery`, `pass`, `report_path`, `warnings[]` |
-| `audit <video> [--mode m] [--fps N] [--frames N] [--min-motion x] [--max-hold s]` | quality audit of any video | `pass`, `checks{name: {ok, value, want}}`, ... |
+| `audit <video> [--mode m] [--fps N] [--frames N] [--min-motion x] [--max-hold s]` | quality audit of supported video inputs | `pass`, `checks{name: {ok, value, want}}`, ... |
 | `mix <spec> -o out.wav` | soundtrack only | `output`, `final{lufs,true_peak}`, `sfx_count`, `music` |
 | `beats <audio>` | tempo and beat grid of a music file | `bpm`, `offset`, `beats`, `confidence`, `first_beats[]` |
 | `sfx <dir>` | export the synthesized SFX kit | `dir`, `count`, `files[]` |
@@ -68,8 +68,9 @@ an audit failure still carries `output` and `audit`):
   (RFC 6901) into the spec for spec errors (`""` = the whole document).
 * Each item of `errors[]` / `warnings[]`: `path`, `message`, `hint`, `keyword` (the schema keyword or
   `build` for dry-build failures such as an unresolvable time), `severity`, optional `value`, `inferred`.
-* `render` / `audit` failures add `failed_checks[]`; `MISSING_TOOL` adds `missing[]`; usage errors add
-  `usage`.
+* Completed `render` / `audit` reports with failed quality checks add `failed_checks[]`; early audit
+  input rejection may return an error without a completed audit report. `MISSING_TOOL` adds
+  `missing[]`; usage errors add `usage`.
 
 stderr in `--json` mode carries JSON lines for long commands:
 
@@ -91,9 +92,9 @@ Defined once in `kstudio/exitcodes.py`; `kinetic-studio exit-codes --json` print
 | 2 | USAGE | bad flags or arguments, unknown mode, directory not empty, file not found | `USAGE`, `MODE_UNKNOWN`, `DIR_NOT_EMPTY`, `FILE_NOT_FOUND` |
 | 3 | SPEC_INVALID | parse error, schema violation, unresolvable time, unknown scene type | `SPEC_INVALID`, `SPEC_NOT_FOUND`, `SPEC_PARSE` |
 | 4 | RENDER_FAILED | the spec was valid but rendering, encoding or muxing failed | `RENDER_FAILED` |
-| 5 | AUDIT_FAILED | the video was written but the quality audit did not pass | `AUDIT_FAILED` |
+| 5 | AUDIT_FAILED | quality audit failed or audit input was rejected | `AUDIT_FAILED` |
 | 6 | MISSING_TOOL | ffmpeg, ffprobe, libx264 or node is not installed | `MISSING_TOOL` |
-| 7 | BACKEND_UNREACHABLE | reserved for a pluggable render backend; not raised yet | `BACKEND_UNREACHABLE` |
+| 7 | BACKEND_UNREACHABLE | optional swap backend unconfigured, unreachable, or not a ComfyUI API | `BACKEND_UNREACHABLE` |
 | 130 | INTERRUPTED | Ctrl-C; re-run the same command to resume from finished chunks | `INTERRUPTED` |
 
 Ctrl-C during `render` stops the workers, keeps every finished 2-second chunk and exits 130 with
@@ -101,6 +102,51 @@ Ctrl-C during `render` stops the workers, keeps every finished 2-second chunk an
 
 Usage errors are raised as `SystemExit(2)` (argparse behaviour) after the envelope is printed, so the
 process exit code is 2 either way.
+
+## Audit input policy and measurement basis
+
+The CLI, render-time audit, MCP `audit` and Python `kstudio.audit.audit` use
+**`reference-1080-v2`** for motion and black-frame sampling. This is a supported-input policy,
+not a claim that every decodable video can be audited.
+
+| Boundary | Supported input / analysis |
+|---|---|
+| Coded video dimensions | Integer short edge **>=144 px**, long edge **<=4096 px**, total **<=9,000,000 pixels** |
+| Analysis grid | Even axes **16..512 px**, total **<=65,536 pixels**; neither axis may exceed the corresponding source axis |
+| Display geometry | Square pixels (`1:1` SAR); absent, `N/A` or `0:1` SAR is treated as unspecified square pixels. Explicit non-unit SAR is unsupported |
+| Rotation | Identity only (0 modulo 360 degrees), checked in rotate tags and display-matrix rotation metadata; decoder autorotation is disabled |
+| Decoded sequence | At least three complete frames and a successful decoder exit |
+
+The grid is one-eighth of a 1080-short-edge reference, rounded down to even dimensions, and
+FFmpeg samples the source directly onto it without upscaling. For example, 720x1280,
+1080x1920 and 2160x3840 all use 134x240; 1920x1080 uses 240x134; 1080x1080 uses 134x134.
+Meeting these limits does not waive codec, audio or other quality checks.
+The coded-size limits alone are not sufficient: extreme aspect ratios can exceed the analysis
+bounds. For example, 1080x4096 is rejected by the analysis-area limit.
+
+Rejected geometry raises `AUDIT_FAILED` (CLI exit **5**), never a successful skip or an automatic
+fallback resize. Machine-readable error reasons distinguish:
+
+- `unsupported_geometry`: invalid/tiny/oversized coded dimensions or an analysis-grid bound violation.
+- `unsupported_display_geometry`: explicit non-unit SAR, nonidentity rotation or invalid display metadata.
+- `invalid_decode`: a detected nonzero decoder exit, partial final frame or fewer than three decoded frames.
+
+Geometry/display validation follows metadata probing and precedes timing/frame decoding. These
+specific errors do not imply that every malformed-file or external-tool failure has the same reason.
+MCP/function callers receive `error.code` and `error.reason`; the one-shot MCP command retains its
+existing success/failure exit convention, rather than the CLI's numeric exit table.
+
+Reports identify the basis in `motion.motion_basis` and `motion.black_basis` and give the actual grid
+in `motion.motion_analysis_size`. The denoising equation and thresholds are unchanged: motion gate
+**1.75**, raw still threshold **0.6**, black threshold **10.0**, and the existing per-mode acceptance
+thresholds. Supported short-edge 1080/default master grids retain their prior measurement basis.
+For non-1080 inputs, sampled motion, hold and black-frame metrics can change; compare reports with
+the basis recorded and retain historical results. This is not universal perceptual calibration or
+a guarantee of identical results for arbitrary resolutions, crops or near-black images.
+
+The bound is **per-frame analysis geometry**, not a global duration, runtime or total-memory limit.
+Decoder work and accumulated per-frame metrics still depend on the input and its duration.
+An audit PASS does not replace visual/readability/audio review or establish release readiness.
 
 ## Schema
 

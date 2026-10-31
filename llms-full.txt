@@ -1,11 +1,11 @@
 # Kinetic Studio
 
-> Local, programmatic motion-graphics video engine: a short JSON spec (scenes on a beat grid plus timeline markers) becomes a finished, beat-synced MP4 with procedural music and sound effects, mixed to -14 LUFS and automatically audited. Five modes: kinetic type, explainer, product promo, data story, social quote or karaoke. Runs on the CPU with Python, Skia and ffmpeg; no API key, no account, no cloud call. MIT licence.
+> Local, programmatic motion-graphics video engine: a short JSON spec (scenes on a beat grid plus timeline markers) becomes a finished, beat-synced MP4 with procedural music and sound effects, mixed to -14 LUFS and automatically audited. Five modes: kinetic type, explainer, product promo, data story, social quote or karaoke. The core renderer runs on the CPU with Python, Skia and ffmpeg without API keys, accounts or network calls after installation. Optional swap uploads chosen video and character inputs to a configured ComfyUI backend; source.swap may trigger this during rendering when configured. Enable it only for inputs you agree to share with that server. MIT licence.
 
 Agents use it through an MCP server (stdio or streamable HTTP), function-calling schemas, a one-shot JSON command line or plain Python. The server needs no extra dependencies:
 
 - MCP command: `uvx --from git+https://github.com/28naem-del/kinetic-studio kstudio-mcp` (from a clone: `python -m kstudio.mcp_server`; HTTP: add `--http 8765`, endpoint `http://127.0.0.1:8765/mcp`)
-- Tools: `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (progress notifications), `audit`. Each returns one JSON object with an `ok` field; failures carry `error: {code, message, hint}`.
+- Nine advertised tools (eight core plus optional-backend swap): `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (progress notifications), `audit`, `swap`. Each returns one JSON object with an `ok` field; failures carry `error: {code, message, hint}`.
 - Workflow: get_schema(mode) -> write the spec from the example -> validate_spec and fix every error -> preview and look at the contact sheet -> render -> report output path and audit verdict.
 - Write every scene length in beats (`"4b"`, `"1/2b"`, `"1bar"`); times can name markers (`"drop-2b"`).
 
@@ -27,7 +27,7 @@ Agents use it through an MCP server (stdio or streamable HTTP), function-calling
 
 ## Quickstarts
 
-- [Quickstart index](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/README.md): one page per agent framework, alphabetical
+- [Quickstart index](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/README.md): 15 quickstart pages for agent frameworks, Python and shell, alphabetical
 - [Plain Python](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/python.md): in-process calls, function calling, raw MCP
 - [Shell and curl](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/shell.md): one-shot JSON, raw stdio, HTTP
 
@@ -51,7 +51,7 @@ Agents use it through an MCP server (stdio or streamable HTTP), function-calling
 
 ---
 name: kinetic-studio
-description: Turn a short brief into a finished, beat-synced motion-graphics video (MP4, 9:16 / 16:9 / 1:1 / 4:5, 24-60 fps, optional 4K) with procedural music and sound effects, mixed to -14 LUFS, and an automatic quality audit. Five modes - kinetic type teaser, explainer, product promo, data story, social quote or karaoke clip. Use when someone asks for a reel, short, teaser, explainer, promo, stats video or quote video and no camera footage is needed. Runs locally (Python, Skia, ffmpeg); no paid API, no account, no cloud call.
+description: Turn a short brief into a finished, beat-synced motion-graphics video (MP4, 9:16 / 16:9 / 1:1 / 4:5, 24-60 fps, optional 4K) with procedural music and sound effects, mixed to -14 LUFS, and an automatic quality audit. Five modes - kinetic type teaser, explainer, product promo, data story, social quote or karaoke clip. Use when someone asks for a reel, short, teaser, explainer, promo, stats video or quote video and no camera footage is needed. The core renderer runs locally (Python, Skia, ffmpeg) without paid APIs, accounts or cloud calls; optional swap sends chosen video and character inputs to a configured ComfyUI backend, only for inputs you agree to share.
 license: MIT
 compatibility: Python 3.10+ and ffmpeg/ffprobe with libx264 on PATH. Works through MCP (stdio or HTTP), the command line or Python.
 metadata:
@@ -186,7 +186,7 @@ Transitions (per scene, on the incoming one): `cut`, `flash`, `cross` (alias `fa
 (spec valid, video rendered and audited). On failure there is `error: {code, message, hint}` and the
 MCP result has `isError: true`; validation problems are a normal result with `ok: false` and an
 `errors` list. Codes: `USAGE`, `MODE_UNKNOWN`, `DIR_NOT_EMPTY`, `FILE_NOT_FOUND`, `SPEC_INVALID`,
-`SPEC_NOT_FOUND`, `SPEC_PARSE`, `RENDER_FAILED`, `MISSING_TOOL`, `INVALID_ARGUMENTS`, `INTERNAL_ERROR`.
+`SPEC_NOT_FOUND`, `SPEC_PARSE`, `RENDER_FAILED`, `AUDIT_FAILED`, `MISSING_TOOL`, `INVALID_ARGUMENTS`, `INTERNAL_ERROR`.
 
 ## Modes
 
@@ -236,6 +236,24 @@ Presets: `reel` / `story` 1080x1920, `landscape` / `youtube` 1920x1080, `square`
 `portrait` 1080x1350; `k4` / `--4k` doubles both sides. Frame rates 24, 25, 30, 50, 60. Quality
 `draft` (no motion blur, for checks), `standard` (default), `high`.
 
+### Audit input limits
+
+Audits use **`reference-1080-v2`**. Coded short edge must be >=144 px, long edge <=4096 px, and
+total pixels <=9,000,000. The even analysis grid must have axes 16..512 px, at most 65,536 pixels,
+and fit within the source without upscaling. Tiny or extreme-aspect inputs that violate these
+limits fail with `AUDIT_FAILED` / `unsupported_geometry` (CLI exit 5), not a successful skip.
+Explicit non-unit SAR or nonidentity rotation, including display-matrix rotation, fails with
+`unsupported_display_geometry`; absent/N/A/0:1 SAR is treated as unspecified square pixels.
+A detected decoder failure, partial final frame or fewer than three frames gives `invalid_decode`.
+
+The denoising equation, motion gate 1.75, raw still threshold 0.6, black threshold 10.0 and mode
+thresholds are unchanged. Supported short-edge 1080/default master grids preserve the prior basis;
+non-1080 sampled motion, hold and black-frame metrics can change. Record the report's basis and
+analysis size; keep historical reports. This is not universal perceptual calibration. The bounds
+limit per-frame analysis geometry only, not total runtime/memory for arbitrary video duration.
+Meeting these limits does not waive other quality checks or replace visual/readability/audio review.
+Full policy: `docs/CLI.md`, “Audit input policy and measurement basis”, in the repository.
+
 ## Troubleshooting
 
 | symptom | fix |
@@ -269,7 +287,7 @@ Presets: `reel` / `story` 1080x1920, `landscape` / `youtube` 1920x1080, `square`
 
 # Tool definitions
 
-Kinetic Studio's eight tools, described once in `kstudio/mcp_server.py` (`TOOLS`) and exported here
+Kinetic Studio's nine advertised tools (eight core plus optional-backend swap), described once in `kstudio/mcp_server.py` (`TOOLS`) and exported here
 for clients that do not speak MCP. Do not edit the JSON files by hand.
 
 | file | for |
@@ -320,7 +338,19 @@ same JSON object on stdout and exits 0 when `ok` is true.
 | `new_spec` | starts a project directory from a mode's example, or from your spec JSON | yes |
 | `preview` | renders stills and a contact sheet (returned as an image) in seconds | yes |
 | `render` | renders, mixes and audits the MP4, with progress notifications | yes |
-| `audit` | re-checks any MP4 (motion, holds, loudness, true peak, frame count) | yes (report) |
+| `audit` | re-checks a supported MP4 (motion, holds, loudness, true peak, frame count) | yes (report) |
+| `swap` | optional Openjutsu swap via a configured ComfyUI URL; no local GPU required | yes (video) |
+
+## Audit support policy
+
+The `audit` / `kstudio_audit` tool uses the same
+[audit input policy and measurement basis](../CLI.md#audit-input-policy-and-measurement-basis) as
+the CLI: `reference-1080-v2`, bounded no-upscale sampling, and explicit rejection of unsupported
+geometry or display metadata. Failures expose `error.code: AUDIT_FAILED` with a reason such as
+`unsupported_geometry`, `unsupported_display_geometry` or `invalid_decode`; they are not successful
+waivers. Successful measurements report `motion.motion_analysis_size`, `motion.motion_basis` and
+`motion.black_basis`. Non1080 sampled metrics may differ from historical reports even though the
+thresholds are unchanged. These are per-frame analysis bounds, not global duration/resource limits.
 
 ---
 
@@ -329,8 +359,8 @@ same JSON object on stdout and exits 0 when `ok` is true.
 # Quickstarts
 
 Kinetic Studio is a local MCP server, a JSON command line and a set of function-calling schemas, so
-it plugs into any agent. Every quickstart below was checked against that framework's current
-documentation on 2026-10-30; each page cites the URL it was checked against.
+it plugs into any agent. There are 15 quickstart pages below. Every quickstart was checked against
+that framework's current documentation on 2026-10-30; each page cites its reference URL.
 
 The one line every MCP client needs:
 
@@ -361,9 +391,12 @@ add `--http 8765` and connect to `http://127.0.0.1:8765/mcp`).
 
 ## What every client gets
 
-Eight tools: `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`,
-`render` (with progress notifications) and `audit`. Each takes a JSON Schema-described object and
-returns one JSON object with an `ok` field. Definitions for clients without MCP live in `docs/tools/`.
+Nine tools are advertised: eight core tools (`list_modes`, `list_scenes`, `get_schema`,
+`validate_spec`, `new_spec`, `preview`, `render` with progress notifications, and `audit`) plus
+`swap`, which requires an optional configured ComfyUI backend. Swap uploads the chosen video and
+character image to that server; see [the swap data boundary](../SWAP.md) before enabling it.
+Each tool takes a JSON Schema-described object and returns one JSON object with an `ok` field.
+Definitions for clients without MCP live in `docs/tools/`.
 
 Both MCP protocol eras are served: the stateless 2026-07-28 revision (`server/discover`) and the
 `initialize` handshake of 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05.

@@ -153,7 +153,8 @@ class Film:
                 raise SpecError(f"scene #{i} has no type")
             cls = get_scene_class(sc["type"])
             start = self.tl.resolve(sc["at"]) if "at" in sc else cursor
-            kind, tparams = "cut", {}
+            kind = "cut"
+            tparams: dict[str, Any] = {}
             if i:
                 try:
                     kind, tparams = TR.parse(sc.get("transition", default_tr), sc.get("transition_dur"))
@@ -287,14 +288,8 @@ class Film:
 
     # ------------------------------------------------------------------ query
     def fingerprint(self, extra: Any = None) -> str:
-        assets = []
-        for root, _, files in os.walk(self.dir):
-            if any(x in root for x in ("/out", "/.kstudio", "/.venv", "/node_modules", "/.git", "/dist", "/demos")):
-                continue
-            for f in sorted(files):
-                if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3", ".ttf", ".otf")):
-                    p = os.path.join(root, f)
-                    assets.append((f, os.path.getsize(p), int(os.path.getmtime(p))))
+        from .assets_hash import asset_fingerprints
+        assets = asset_fingerprints(self.dir, self.spec)
         return spec_hash(self.spec, [__version__, engine_hash(), self.W, self.H, extra, assets])
 
     def scene_at(self, t: float) -> Scene:

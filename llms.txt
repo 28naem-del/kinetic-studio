@@ -1,11 +1,11 @@
 # Kinetic Studio
 
-> Local, programmatic motion-graphics video engine: a short JSON spec (scenes on a beat grid plus timeline markers) becomes a finished, beat-synced MP4 with procedural music and sound effects, mixed to -14 LUFS and automatically audited. Five modes: kinetic type, explainer, product promo, data story, social quote or karaoke. Runs on the CPU with Python, Skia and ffmpeg; no API key, no account, no cloud call. MIT licence.
+> Local, programmatic motion-graphics video engine: a short JSON spec (scenes on a beat grid plus timeline markers) becomes a finished, beat-synced MP4 with procedural music and sound effects, mixed to -14 LUFS and automatically audited. Five modes: kinetic type, explainer, product promo, data story, social quote or karaoke. The core renderer runs on the CPU with Python, Skia and ffmpeg without API keys, accounts or network calls after installation. Optional swap uploads chosen video and character inputs to a configured ComfyUI backend; source.swap may trigger this during rendering when configured. Enable it only for inputs you agree to share with that server. MIT licence.
 
 Agents use it through an MCP server (stdio or streamable HTTP), function-calling schemas, a one-shot JSON command line or plain Python. The server needs no extra dependencies:
 
 - MCP command: `uvx --from git+https://github.com/28naem-del/kinetic-studio kstudio-mcp` (from a clone: `python -m kstudio.mcp_server`; HTTP: add `--http 8765`, endpoint `http://127.0.0.1:8765/mcp`)
-- Tools: `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (progress notifications), `audit`. Each returns one JSON object with an `ok` field; failures carry `error: {code, message, hint}`.
+- Nine advertised tools (eight core plus optional-backend swap): `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (progress notifications), `audit`, `swap`. Each returns one JSON object with an `ok` field; failures carry `error: {code, message, hint}`.
 - Workflow: get_schema(mode) -> write the spec from the example -> validate_spec and fix every error -> preview and look at the contact sheet -> render -> report output path and audit verdict.
 - Write every scene length in beats (`"4b"`, `"1/2b"`, `"1bar"`); times can name markers (`"drop-2b"`).
 
@@ -27,7 +27,7 @@ Agents use it through an MCP server (stdio or streamable HTTP), function-calling
 
 ## Quickstarts
 
-- [Quickstart index](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/README.md): one page per agent framework, alphabetical
+- [Quickstart index](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/README.md): 15 quickstart pages for agent frameworks, Python and shell, alphabetical
 - [Plain Python](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/python.md): in-process calls, function calling, raw MCP
 - [Shell and curl](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/shell.md): one-shot JSON, raw stdio, HTTP
 

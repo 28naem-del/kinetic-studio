@@ -1,5 +1,6 @@
 """Kinetic mode: beat-locked cues, variable-axis landings, frame fill and old-spec compatibility."""
 import inspect
+import math
 import os
 
 import numpy as np
@@ -90,6 +91,41 @@ def test_scramble_fills_width_and_resolves_on_beats():
     hit = [c for c in sc.cues() if c.kind == "hit"][0]
     assert abs(hit.at / beat - round(hit.at / beat)) < 1e-3
     assert hit.at >= sc._locks()[-1]
+
+
+@pytest.mark.parametrize("size", [(1080, 1920), (720, 1280)])
+def test_scramble_complete_phrase_holds_before_whip(size, monkeypatch):
+    """Inspect actual draw submissions with real fonts/layout at both delivery sizes.
+
+    Not a substitute for reviewing the newly encoded videos.
+    """
+    film = _film(w=size[0], h=size[1])
+    sc = _scene(film, "scramble")
+    boundary = next(b for b in film.boundaries if b.a is sc)
+    assert boundary.kind == "whip"
+    expected = sc.p["lines"]
+    assert expected[-1] == "FRAMES > LOCAL"
+    calls = []
+    original = D.draw_text
+
+    def capture(*args, **kwargs):
+        if kwargs.get("align") == "left":
+            calls.append((args[1], args[5]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(D, "draw_text", capture)
+    first = math.ceil((sc.start + sc.dur * 0.5) * film.fps)
+    stop = math.ceil(boundary.t0 * film.fps)
+    assert (first, stop) == (254, 278)
+    assert (stop - first) / film.fps >= sc.dur * 0.35
+    # Include the full outgoing transition, then revisit earlier times to prove
+    # the resolved state is stateless and cannot scramble again.
+    frames = list(range(first, math.ceil(boundary.t1 * film.fps)))
+    for frame in frames + list(reversed(frames)):
+        calls.clear()
+        sc.draw(_ctx(film, sc, frame / film.fps - sc.start))
+        assert [text for text, _ in calls[:4]] == expected, frame
+        assert all(skia.ColorGetA(color) >= 178 for _, color in calls[:4])
 
 
 def test_house_easing_in_kinetic():

@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -189,9 +190,10 @@ def _file_digest(path: str) -> str:
     return h.hexdigest()
 
 
-def swap_key(req: dict[str, Any]) -> str:
+def swap_key(req: dict[str, Any], *, digest: Callable[[str], str] | None = None) -> str:
     """Content key of a swap request: the bytes of both inputs plus every setting (16 hex chars)."""
-    parts = [_file_digest(req["video"]), _file_digest(req["character"]), req["mode"], req["prompt"],
+    read_digest = digest or _file_digest
+    parts = [read_digest(req["video"]), read_digest(req["character"]), req["mode"], req["prompt"],
              req.get("target", ""), int(req.get("seed", 0))]
     return hashlib.sha256(json.dumps(parts).encode()).hexdigest()[:16]
 

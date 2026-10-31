@@ -121,7 +121,8 @@ def link_shots(scenes: list[Scene]) -> None:
     zw, prev = 0.0, None
     for i, sc in enumerate(scenes):
         cam = sc.cam
-        push = float(sc.p.get("push") if sc.p.get("push") is not None else cam.get("push", 0.04))
+        push_value = sc.p.get("push")
+        push = float(push_value if push_value is not None else cam.get("push", 0.04))
         carry = str(cam.get("carry", "world"))
         m0 = 0.55
         if prev is not None and carry != "none":

@@ -30,7 +30,7 @@ from __future__ import annotations
 import bisect
 import math
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -150,7 +150,8 @@ class Timeline:
         if div <= 0:
             raise ValueError("div must be > 0")
         b = self.time_to_beat(t) * div
-        r = {"nearest": round, "floor": math.floor, "ceil": math.ceil}[mode](b + (1e-9 if mode == "floor" else -1e-9 if mode == "ceil" else 0.0))
+        rounding: dict[str, Callable[[float], int]] = {"nearest": round, "floor": math.floor, "ceil": math.ceil}
+        r = rounding[mode](b + (1e-9 if mode == "floor" else -1e-9 if mode == "ceil" else 0.0))
         return self.beat_to_time(r / div)
 
     def snap_bar(self, t: float, mode: str = "nearest") -> float:

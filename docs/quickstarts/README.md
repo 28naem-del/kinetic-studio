@@ -1,8 +1,8 @@
 # Quickstarts
 
 Kinetic Studio is a local MCP server, a JSON command line and a set of function-calling schemas, so
-it plugs into any agent. Every quickstart below was checked against that framework's current
-documentation on 2026-10-30; each page cites the URL it was checked against.
+it plugs into any agent. There are 15 quickstart pages below. Every quickstart was checked against
+that framework's current documentation on 2026-10-30; each page cites its reference URL.
 
 The one line every MCP client needs:
 
@@ -33,9 +33,12 @@ add `--http 8765` and connect to `http://127.0.0.1:8765/mcp`).
 
 ## What every client gets
 
-Eight tools: `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`,
-`render` (with progress notifications) and `audit`. Each takes a JSON Schema-described object and
-returns one JSON object with an `ok` field. Definitions for clients without MCP live in `docs/tools/`.
+Nine tools are advertised: eight core tools (`list_modes`, `list_scenes`, `get_schema`,
+`validate_spec`, `new_spec`, `preview`, `render` with progress notifications, and `audit`) plus
+`swap`, which requires an optional configured ComfyUI backend. Swap uploads the chosen video and
+character image to that server; see [the swap data boundary](../SWAP.md) before enabling it.
+Each tool takes a JSON Schema-described object and returns one JSON object with an `ok` field.
+Definitions for clients without MCP live in `docs/tools/`.
 
 Both MCP protocol eras are served: the stateless 2026-07-28 revision (`server/discover`) and the
 `initialize` handshake of 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05.

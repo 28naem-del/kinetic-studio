@@ -119,7 +119,7 @@ def mode_rules(mode: str, duration: float | None = None) -> dict[str, Any]:
 def mode_scene_types(mode: str) -> list[str]:
     """Scene types designed for a mode (its own scene module plus the common scenes)."""
     from .scenes import REGISTRY
-    return sorted(n for n, c in REGISTRY.items() if c.__module__.rsplit(".", 1)[-1] in (mode, "common"))
+    return sorted(n for n, c in REGISTRY.items() if c.__module__.rsplit(".", 1)[-1] in (mode, "common", "clip"))
 
 
 def prompt_pack(text: str, mode: str = "kinetic", duration: float | None = None, preset: str = "reel",

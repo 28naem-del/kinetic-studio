@@ -20,7 +20,7 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
 
@@ -41,6 +41,16 @@ SCALES = {"major": (0, 2, 4, 5, 7, 9, 11), "minor": (0, 2, 3, 5, 7, 8, 10), "dor
 Pattern = dict[str, dict[int, str]]
 
 
+class KickParams(TypedDict, total=False):
+    f_start: float
+    f_end: float
+    tau_p: float
+    decay: float
+    click: float
+    drive: float
+    seed: int
+
+
 @dataclass
 class Style:
     name: str
@@ -59,7 +69,7 @@ class Style:
     drums: Pattern = field(default_factory=dict)
     bass_pat: dict[int, str] = field(default_factory=dict)
     bass_voice: dict[str, Any] = field(default_factory=dict)
-    kick: dict[str, float] = field(default_factory=dict)
+    kick: KickParams = field(default_factory=lambda: KickParams())
     reverb: tuple[float, float] = (1.6, 0.02)          # RT60 s, pre-delay s
     sends: dict[str, float] = field(default_factory=dict)
     duck_db: dict[str, float] = field(default_factory=dict)
@@ -354,7 +364,7 @@ def _glue(x: np.ndarray, ratio: float = 2.0, win: float = 0.03, over_db: float =
     env = np.sqrt(cv2.blur(m.reshape(1, -1).astype(np.float32), (k, 1)).ravel() + 1e-12)
     ref = np.percentile(env[env > 1e-6], 90) if (env > 1e-6).any() else 1.0
     thr = ref * 10 ** (-over_db / 20)
-    g = np.where(env > thr, (env / thr) ** (1 / ratio - 1), 1.0).astype(np.float32)
+    g: np.ndarray = np.where(env > thr, (env / thr) ** (1 / ratio - 1), 1.0).astype(np.float32)
     g = cv2.blur(g.reshape(1, -1), (int(0.08 * SR), 1)).ravel()
     return (x * g[:, None]).astype(np.float32)
 
@@ -396,7 +406,7 @@ def generate(style: str, tl: Timeline, duration: float, seed: int = 0, stop_at: 
         return t
 
     # one-shot banks (velocity applied as gain; round-robin variants against machine-gunning)
-    kp = {"f_end": _bass_hz(st, 0) if _bass_hz(st, 0) < 62 else _bass_hz(st, 0) / 2 * 1.0, **st.kick}
+    kp: KickParams = {"f_end": _bass_hz(st, 0) if _bass_hz(st, 0) < 62 else _bass_hz(st, 0) / 2 * 1.0, **st.kick}
     kp["f_end"] = min(62.0, max(42.0, kp["f_end"]))
     kick_c = I.kick(**kp)
     soft_kick = I.kick(f_start=kp.get("f_start", 150), f_end=kp["f_end"], tau_p=0.04, decay=0.22, click=0.2, drive=1.4)
@@ -468,8 +478,8 @@ def generate(style: str, tl: Timeline, duration: float, seed: int = 0, stop_at: 
                 nxt = tl.beat_to_time(b + (s + 2) / 4) - ts
                 k = int(max(0.03, nxt) * SR)
                 c2 = clip[:k].copy()
-                f = min(len(c2), int(0.006 * SR))
-                c2[-f:] *= np.linspace(1, 0, f)
+                fade_samples = min(len(c2), int(0.006 * SR))
+                c2[-fade_samples:] *= np.linspace(1, 0, fade_samples)
                 bus.add("hats", c2, ts, 0.16 * ef, pan=-0.45)
             p = pat("shaker", e)
             if p and p[step % 16] == "x":
@@ -602,8 +612,8 @@ def generate(style: str, tl: Timeline, duration: float, seed: int = 0, stop_at: 
                 A.add_at(fill, A.pan(clip, 0.15 * math.sin(t * 9)), int(round((t - base) * SR)), 0.42 * v)
             # gate: the fill ends exactly on the cut (3 ms fade into the cut sample)
             endk = int(round((c - base) * SR))
-            f = int(0.003 * SR)
-            fill[max(0, endk - f):endk] *= np.linspace(1, 0, min(f, endk))[:, None]
+            fill_fade_samples = int(0.003 * SR)
+            fill[max(0, endk - fill_fade_samples):endk] *= np.linspace(1, 0, min(fill_fade_samples, endk))[:, None]
             fill[endk:] = 0
             bus.add("fill", fill, base, 1.0)
         elif k == "riser":
@@ -632,16 +642,16 @@ def generate(style: str, tl: Timeline, duration: float, seed: int = 0, stop_at: 
     # -------------------------------------------------------------------- mix: ducking, sends, master
     ducks = {k: _duck(N, kicks, spb, v * st.sidechain / 0.5) for k, v in st.duck_db.items()}
     lv = {**LEVELS, **{k[3:]: v for k, v in g.items() if k.startswith("lv_")}}
-    for k, v in lv.items():
-        if k in bus.stems:
-            bus.stems[k] *= np.float32(v)
-    for k, side in (("pad", 1), ("hook", -1), ("keys", 1)):
-        if lv.get(k + "_haas", 0) > 0 and k in bus.stems:
-            bus.stems[k] = A.haas(bus.stems[k], lv[k + "_haas"], side, 0.7)
+    for stem_name, v in lv.items():
+        if stem_name in bus.stems:
+            bus.stems[stem_name] *= np.float32(v)
+    for stem_name, side in (("pad", 1), ("hook", -1), ("keys", 1)):
+        if lv.get(stem_name + "_haas", 0) > 0 and stem_name in bus.stems:
+            bus.stems[stem_name] = A.haas(bus.stems[stem_name], lv[stem_name + "_haas"], side, 0.7)
     drums = bus.get("kick") * 1.0 + bus.get("clap") + bus.get("hats") + bus.get("perc") + bus.get("fill")
     stems = {
         "drums": drums,
-        "bass": bus.get("bass") * ducks.get("bass", 1.0)[:, None] if "bass" in ducks else bus.get("bass"),
+        "bass": bus.get("bass") * ducks["bass"][:, None] if "bass" in ducks else bus.get("bass"),
         "pad": bus.get("pad") * (ducks["pad"][:, None] if "pad" in ducks else 1.0),
         "keys": bus.get("keys") * (ducks["keys"][:, None] if "keys" in ducks else 1.0),
         "hook": bus.get("hook") * (ducks["hook"][:, None] if "hook" in ducks else 1.0),

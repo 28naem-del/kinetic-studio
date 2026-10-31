@@ -29,9 +29,9 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Callable, Sequence
 
 
 def clamp(x: float, a: float = 0.0, b: float = 1.0) -> float:
@@ -50,7 +50,7 @@ def prog(t: float, start: float, dur: float) -> float:
 
 
 def remap(x: float, a: float, b: float, c: float, d: float,
-          ease: "Callable[[float], float] | str | None" = None, clamp_: bool = True) -> float:
+          ease: Callable[[float], float] | str | None = None, clamp_: bool = True) -> float:
     """Map x from [a, b] to [c, d] (After Effects linear()/ease()), optionally through an easing."""
     u = (x - a) / (b - a) if b != a else 1.0
     if clamp_:
@@ -199,7 +199,7 @@ def back_k(overshoot: float) -> float:
     return (lo + hi) / 2
 
 
-def back(overshoot: float = MAX_OVERSHOOT, cap: float = MAX_OVERSHOOT) -> "Ease":
+def back(overshoot: float = MAX_OVERSHOOT, cap: float = MAX_OVERSHOOT) -> Ease:
     """Out-back ease that overshoots by ``overshoot`` (fraction of travel, clamped to ``cap``)."""
     ov = max(0.0, min(float(overshoot), float(cap)))
     k = back_k(ov)
@@ -207,7 +207,7 @@ def back(overshoot: float = MAX_OVERSHOOT, cap: float = MAX_OVERSHOOT) -> "Ease"
 
 
 # ---------------------------------------------------------------------------- cubic bezier
-def cubic_bezier(x1: float, y1: float, x2: float, y2: float) -> "Ease":
+def cubic_bezier(x1: float, y1: float, x2: float, y2: float) -> Ease:
     """CSS ``cubic-bezier(x1, y1, x2, y2)``: solve x(s) = u for s (Newton, bisection fallback),
     return y(s). x1, x2 are clamped to [0, 1] as CSS requires; y may overshoot."""
     x1, x2 = clamp(float(x1)), clamp(float(x2))
@@ -251,7 +251,7 @@ def cubic_bezier(x1: float, y1: float, x2: float, y2: float) -> "Ease":
     return Ease(f, f"cubic-bezier({x1:g},{y1:g},{x2:g},{y2:g})")
 
 
-def steps(n: int, jump: str = "end") -> "Ease":
+def steps(n: int, jump: str = "end") -> Ease:
     """Stop-motion cadence: n discrete steps (CSS ``steps(n, jump-end)`` / ``jump-start``)."""
     n = max(1, int(n))
     if jump == "start":
@@ -335,7 +335,7 @@ class Spring:
         """Time after which |x - 1| stays below ``tol`` and |x'| below ``tol * omega0``."""
         return _settle_time(self.stiffness, self.damping, self.mass, self.velocity, tol)
 
-    def ease(self, tol: float = 1e-3) -> "Ease":
+    def ease(self, tol: float = 1e-3) -> Ease:
         """Normalised ease: u in [0, 1] maps to [0, settle_time]; exactly 1 at u = 1."""
         ts = self.settle_time(tol)
 
@@ -354,7 +354,7 @@ class Spring:
         return 1 - b if b >= 0 else 1 / (1 + b)
 
     @classmethod
-    def perceptual(cls, duration: float = 0.5, bounce: float = 0.0, velocity: float = 0.0) -> "Spring":
+    def perceptual(cls, duration: float = 0.5, bounce: float = 0.0, velocity: float = 0.0) -> Spring:
         """Apple-style perceptual duration/bounce: k = (2 pi / d)^2, c = 4 pi zeta / d, m = 1.
         (The tail keeps moving after ``duration``; use :meth:`settling` to land on a beat.)"""
         d = max(float(duration), 1e-3)
@@ -363,7 +363,7 @@ class Spring:
 
     @classmethod
     def settling(cls, duration: float, bounce: float = 0.0, velocity: float = 0.0,
-                 tol: float = 1e-3) -> "Spring":
+                 tol: float = 1e-3) -> Spring:
         """Spring with the given bounce whose settle time (``tol``) is exactly ``duration`` s.
 
         Settle time scales as 1/omega0 for a fixed damping ratio, so omega0 is solved by a
@@ -556,7 +556,7 @@ def _resolve_str(spec: str) -> Ease:
                      "or cubic-bezier(a,b,c,d) / spring(dur,bounce) / back(overshoot) / steps(n)")
 
 
-def resolve(spec: "str | Callable[[float], float] | Ease | Spring | dict | None",
+def resolve(spec: str | Callable[[float], float] | Ease | Spring | dict | None,
             default: str = "out_expo") -> Ease:
     """Turn a string / callable / Spring / dict into an :class:`Ease` (string results are cached).
 
@@ -580,7 +580,8 @@ def resolve(spec: "str | Callable[[float], float] | Ease | Spring | dict | None"
             sp = Spring.settling(o.get("duration", 0.5), o.get("bounce", 0.0), o.get("velocity", 0.0))
             return sp.ease()
         if "bezier" in spec or "cubic_bezier" in spec:
-            return cubic_bezier(*spec.get("bezier", spec.get("cubic_bezier")))
+            control = spec["bezier"] if "bezier" in spec else spec["cubic_bezier"]
+            return cubic_bezier(*control)
         if "back" in spec:
             return back(float(spec["back"]))
         if "ease" in spec:
@@ -591,7 +592,7 @@ def resolve(spec: "str | Callable[[float], float] | Ease | Spring | dict | None"
     raise TypeError(f"cannot resolve easing from {spec!r}")
 
 
-def animate(t: float, start: float, ease: "str | Callable[[float], float] | Ease | None" = None,
+def animate(t: float, start: float, ease: str | Callable[[float], float] | Ease | None = None,
             dur: float | None = None, a: float = 0.0, b: float = 1.0) -> float:
     """Value of a tween from ``a`` to ``b`` starting at ``start``. ``dur`` defaults to the ease's
     natural duration (springs) or 0.5 s."""
@@ -601,7 +602,7 @@ def animate(t: float, start: float, ease: "str | Callable[[float], float] | Ease
 
 
 # ---------------------------------------------------------------------------- stagger
-def _order_metric(i: int, n: int, order: "str | int | float") -> float:
+def _order_metric(i: int, n: int, order: str | int | float) -> float:
     mid = (n - 1) / 2
     if isinstance(order, (int, float)) and not isinstance(order, bool):
         return abs(i - float(order))
@@ -626,7 +627,7 @@ def _random_ranks(n: int, seed: int) -> list[float]:
 
 
 def _distribute(metric: Sequence[float], each: float, start: float, max_total: float | None,
-                ease: "str | Callable[[float], float] | None") -> list[float]:
+                ease: str | Callable[[float], float] | None) -> list[float]:
     mmax = max(metric) if metric else 0.0
     total = each * mmax
     if max_total is not None:
@@ -641,8 +642,8 @@ def _distribute(metric: Sequence[float], each: float, start: float, max_total: f
     return out
 
 
-def stagger(n: int, each: float = 0.05, *, start: float = 0.0, order: "str | int | float" = "first",
-            max_total: float | None = None, ease: "str | Callable[[float], float] | None" = None,
+def stagger(n: int, each: float = 0.05, *, start: float = 0.0, order: str | int | float = "first",
+            max_total: float | None = None, ease: str | Callable[[float], float] | None = None,
             seed: int = 0) -> list[float]:
     """Per-item start delays (seconds) for n siblings.
 
@@ -660,9 +661,9 @@ def stagger(n: int, each: float = 0.05, *, start: float = 0.0, order: "str | int
     return _distribute(metric, each, start, max_total, ease)
 
 
-def stagger_grid(cols: int, rows: int, each: float = 0.05, *, origin: "str | tuple[float, float]" = "centre",
+def stagger_grid(cols: int, rows: int, each: float = 0.05, *, origin: str | tuple[float, float] = "centre",
                  axis: str | None = None, start: float = 0.0, max_total: float | None = None,
-                 ease: "str | Callable[[float], float] | None" = None) -> list[float]:
+                 ease: str | Callable[[float], float] | None = None) -> list[float]:
     """Delays for a cols x rows grid (row-major list). Delay grows with the distance of each cell
     from ``origin`` ("centre", "first" = top-left, "last" = bottom-right, or (col, row));
     ``axis`` = "x" or "y" measures only that axis (column or row sweeps)."""
@@ -682,7 +683,7 @@ def stagger_grid(cols: int, rows: int, each: float = 0.05, *, origin: "str | tup
 
 
 def stagger_progress(t: float, i: int, delays: Sequence[float], dur: float,
-                     ease: "str | Callable[[float], float] | None" = None) -> float:
+                     ease: str | Callable[[float], float] | None = None) -> float:
     """Eased 0..1 progress of item i at time t, given ``delays`` (from stagger()) and a per-item dur."""
     return resolve(ease)(prog(t, delays[i], dur))
 

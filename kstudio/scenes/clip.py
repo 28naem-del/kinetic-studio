@@ -7,7 +7,7 @@ in its own time window.
 
 Decoding is local and done once: ffmpeg trims, crops to the visible region and scales to the size
 the frame needs (never upscaling), then the raw frames are written to a disk cache keyed by the
-file (path, size, mtime), the trim, the target size and the look. Render workers share the cache
+file content digest, the trim, the target size and the look. Render workers share the cache
 through a memory map, so a clip costs one decode per look however many processes draw it. Film
 time maps to the nearest decoded frame, so any source frame rate plays at real speed.
 
@@ -101,8 +101,8 @@ class DecodePlan:
     blur: float             # Gaussian sigma in decoded pixels
 
     def key(self) -> str:
-        st = os.stat(self.src)
-        blob = json.dumps([CACHE_VERSION, os.path.abspath(self.src), st.st_size, st.st_mtime_ns,
+        from ..assets_hash import content_digest
+        blob = json.dumps([CACHE_VERSION, content_digest(self.src),
                            round(self.t0, 4), round(self.t1, 4), round(self.fps, 4), self.crop, self.size,
                            self.grade, round(self.blur, 3)])
         return hashlib.sha256(blob.encode()).hexdigest()[:20]

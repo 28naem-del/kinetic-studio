@@ -1,6 +1,6 @@
 # Tool definitions
 
-Kinetic Studio's eight tools, described once in `kstudio/mcp_server.py` (`TOOLS`) and exported here
+Kinetic Studio's nine advertised tools (eight core plus optional-backend swap), described once in `kstudio/mcp_server.py` (`TOOLS`) and exported here
 for clients that do not speak MCP. Do not edit the JSON files by hand.
 
 | file | for |
@@ -51,4 +51,16 @@ same JSON object on stdout and exits 0 when `ok` is true.
 | `new_spec` | starts a project directory from a mode's example, or from your spec JSON | yes |
 | `preview` | renders stills and a contact sheet (returned as an image) in seconds | yes |
 | `render` | renders, mixes and audits the MP4, with progress notifications | yes |
-| `audit` | re-checks any MP4 (motion, holds, loudness, true peak, frame count) | yes (report) |
+| `audit` | re-checks a supported MP4 (motion, holds, loudness, true peak, frame count) | yes (report) |
+| `swap` | optional Openjutsu swap via a configured ComfyUI URL; no local GPU required | yes (video) |
+
+## Audit support policy
+
+The `audit` / `kstudio_audit` tool uses the same
+[audit input policy and measurement basis](../CLI.md#audit-input-policy-and-measurement-basis) as
+the CLI: `reference-1080-v2`, bounded no-upscale sampling, and explicit rejection of unsupported
+geometry or display metadata. Failures expose `error.code: AUDIT_FAILED` with a reason such as
+`unsupported_geometry`, `unsupported_display_geometry` or `invalid_decode`; they are not successful
+waivers. Successful measurements report `motion.motion_analysis_size`, `motion.motion_basis` and
+`motion.black_basis`. Non1080 sampled metrics may differ from historical reports even though the
+thresholds are unchanged. These are per-frame analysis bounds, not global duration/resource limits.

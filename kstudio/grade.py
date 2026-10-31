@@ -36,11 +36,11 @@ def _rgb(v: Any) -> RGB:
             h = "".join(c * 2 for c in h)
         return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0)
     if isinstance(v, (int, float)):
-        return (float(v),) * 3  # type: ignore[return-value]
+        return (float(v), float(v), float(v))
     a = tuple(float(x) for x in v)
     if len(a) != 3:
         raise ValueError(f"expected 3 components, got {v!r}")
-    return a  # type: ignore[return-value]
+    return (a[0], a[1], a[2])
 
 
 @dataclass(frozen=True)
@@ -79,23 +79,23 @@ GRADES: dict[str, Grade] = {
     "neutral": NEUTRAL,
     # kinetic type: black / bone / signal red -> punchy, cool-black shadows, warm bone highlights
     "ink": Grade(lift=(0.0, 0.0, 0.004), gain=(1.0, 0.99, 0.975), contrast=0.12, saturation=1.04,
-                 shadow_tint="#1c2a3a", shadow_amount=0.10, highlight_tint="#ffd8b0", highlight_amount=0.06,
+                 shadow_tint=_rgb("#1c2a3a"), shadow_amount=0.10, highlight_tint=_rgb("#ffd8b0"), highlight_amount=0.06,
                  vignette=0.35, halation=(1.0, 0.62, 0.48), grain=0.05),
     # explainer: navy / teal / amber -> cold tech, clean whites
     "lab": Grade(lift=(0.0, 0.003, 0.008), gain=(0.975, 1.0, 1.02), contrast=0.06, saturation=0.96,
-                 shadow_tint="#14394f", shadow_amount=0.10, highlight_tint="#fff1de", highlight_amount=0.04,
+                 shadow_tint=_rgb("#14394f"), shadow_amount=0.10, highlight_tint=_rgb("#fff1de"), highlight_amount=0.04,
                  vignette=0.3, halation=(0.85, 1.0, 1.0), grain=0.04),
     # promo: ink violet + cyan -> rich, slightly lifted violet blacks
     "studio": Grade(lift=(0.004, 0.0, 0.01), gain=(1.01, 0.99, 1.0), contrast=0.10, saturation=1.06,
-                    shadow_tint="#2a1a5c", shadow_amount=0.10, highlight_tint="#ffe8f4", highlight_amount=0.05,
+                    shadow_tint=_rgb("#2a1a5c"), shadow_amount=0.10, highlight_tint=_rgb("#ffe8f4"), highlight_amount=0.05,
                     vignette=0.25, halation=(0.9, 0.8, 1.0), grain=0.04),
     # data / trading: near-black + neon -> high contrast, faint green-cyan shadows
     "terminal": Grade(lift=(0.0, 0.002, 0.003), gain=(0.985, 1.0, 1.0), contrast=0.14, saturation=1.02,
-                      shadow_tint="#0b3326", shadow_amount=0.08, highlight_tint="#f2fff8", highlight_amount=0.03,
+                      shadow_tint=_rgb("#0b3326"), shadow_amount=0.08, highlight_tint=_rgb("#f2fff8"), highlight_amount=0.03,
                       vignette=0.35, halation=(0.8, 1.0, 0.9), grain=0.045),
     # social / quote: espresso / amber -> editorial warm paper, milky blacks
     "warm": Grade(lift=(0.012, 0.008, 0.004), gamma=(1.03, 1.03, 1.03), gain=(1.0, 0.98, 0.94), contrast=0.06,
-                  saturation=0.92, shadow_tint="#3a2414", shadow_amount=0.12, highlight_tint="#ffd29a",
+                  saturation=0.92, shadow_tint=_rgb("#3a2414"), shadow_amount=0.12, highlight_tint=_rgb("#ffd29a"),
                   highlight_amount=0.08, vignette=0.4, halation=(1.0, 0.55, 0.3), grain=0.055),
 }
 # hex tints are normalised to RGB tuples so presets stay hashable and comparable

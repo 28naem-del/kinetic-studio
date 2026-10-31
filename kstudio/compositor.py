@@ -46,11 +46,12 @@ Post chain (``_post_linear``, float32)
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Protocol, cast
 
 import cv2
 import numpy as np
 import skia
+from numpy.typing import NDArray
 
 from . import grade as G
 from .film import Film
@@ -93,6 +94,27 @@ def _hash32(*xs: int) -> int:
     return h
 
 
+class _AllocatingDenseFlow(Protocol):
+    """OpenCV's runtime None-output overload, absent from some generated stubs.
+
+    None asks calc to allocate a fresh float32 two-channel flow. Keep that call
+    unchanged: passing a preallocated/initial flow can change the algorithm.
+    """
+
+    def calc(self, first: NDArray[np.uint8], second: NDArray[np.uint8], flow: None, /) -> NDArray[np.float32]: ...
+
+
+def _calc_flow(engine: cv2.DISOpticalFlow, first: NDArray[np.uint8],
+               second: NDArray[np.uint8]) -> NDArray[np.float32]:
+    return cast(_AllocatingDenseFlow, engine).calc(first, second, None)
+
+
+def _require_sample(sample: np.ndarray | None) -> np.ndarray:
+    """A rendered stratum must have a frame before flow or accumulation uses it."""
+    assert sample is not None
+    return sample
+
+
 class Compositor:
     def __init__(self, film: Film, out: Output, post: dict | None = None, seed: int | None = None,
                  grade: Any = None):
@@ -117,7 +139,7 @@ class Compositor:
         s = min(self.W, self.H) / 1080.0
         self.s = s
         self._dec = G.decode_lut()
-        self._dis = None
+        self._dis: cv2.DISOpticalFlow | None = None
         self._last_vec = (0.0, 0.0)
         self._gray = np.empty((self.H, self.W), np.uint8)
         self._sw = cv2.pyrDown(cv2.pyrDown(cv2.pyrDown(self._gray))).shape[1]
@@ -174,6 +196,7 @@ class Compositor:
         self.pad = 64
         want = float(self.post.get("grain", self.grade.grain or 0.0)) > 0
         key = (self.W, self.H, self.seed, want)
+        self.grain_fields: list[np.ndarray]
         if key in _FIELD_CACHE:  # one build per process (tests / previews make many compositors)
             self.grain_fields, self.dither = _FIELD_CACHE[key]
             self.grain = self.grain_fields[0] if self.grain_fields else None
@@ -181,7 +204,7 @@ class Compositor:
         rng = np.random.default_rng(self.seed)
         s = self.s
         gh, gw = self.H + self.pad, self.W + self.pad
-        self.grain_fields: list[np.ndarray] = []
+        self.grain_fields = []
         if want:
             for _ in range(4):
                 # a strong coarse (~2-3 px) layer: film-like clumps that also survive x264 at delivery
@@ -236,11 +259,11 @@ class Compositor:
     def _flow_px(self, a: np.ndarray, b: np.ndarray) -> float:
         """Robust max displacement (full-res px) between two 1/8-res gray frames."""
         d = cv2.absdiff(a, b)
-        if int(d.max()) <= _STATIC_TOL:
+        if int(np.max(d)) <= _STATIC_TOL:
             return 0.0
         if self._dis is None:
-            self._dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_ULTRAFAST)
-        flow = self._dis.calc(a, b, None)
+            self._dis = cv2.DISOpticalFlow.create(cv2.DISOPTICAL_FLOW_PRESET_ULTRAFAST)
+        flow = _calc_flow(self._dis, a, b)
         mag = cv2.magnitude(flow[..., 0], flow[..., 1])
         mask = d > 6
         if int(mask.sum()) >= 4:
@@ -300,7 +323,7 @@ class Compositor:
         rgbs[-1], smalls[-1] = self._sample_rgb(self._time(t, span, us[-1]))
         sa, sb = smalls[0], smalls[-1]
         assert sa is not None and sb is not None
-        if int(cv2.absdiff(sa, sb).max()) <= _STATIC_TOL:
+        if int(np.max(cv2.absdiff(sa, sb))) <= _STATIC_TOL:
             st["adaptive_skips"] += 1
             return self._finish([(rgbs[0], 0.5), (rgbs[-1], 0.5)], 2)
         if self._flash_alpha(i) >= _FLASH_VEIL:
@@ -314,18 +337,22 @@ class Compositor:
         rgbs[km], smalls[km] = self._sample_rgb(self._time(t, span, us[km]))
         # slow: small flow AND the middle sub-frame is explained by blending the ends (this also
         # catches displacements too large for the flow search, e.g. thin objects at whip speed)
-        mid_err = int(cv2.absdiff(smalls[km], cv2.addWeighted(sa, 0.5, sb, 0.5, 0.0)).max())
+        middle = smalls[km]
+        assert middle is not None
+        mid_err = int(np.max(cv2.absdiff(middle, cv2.addWeighted(sa, 0.5, sb, 0.5, 0.0))))
         if mid_err <= _MID_TOL and self._flow_px(sa, sb) / max(us[-1] - us[0], 1e-3) <= _SLOW_PX:
             st["slow_frames"] += 1
             return self._finish([(rgbs[0], 1 / 3), (rgbs[km], 1 / 3), (rgbs[-1], 1 / 3)], 3)
         for k in range(1, n - 1):
             if rgbs[k] is None:
                 rgbs[k], smalls[k] = self._sample_rgb(self._time(t, span, us[k]))
+        # All base samples have now been rendered; preserve their order and narrow the type.
+        gray_samples = [_require_sample(sample) for sample in smalls]
         # subdivide strata whose neighbouring sub-frames are more than _GAP_PX apart
         gaps, vecs = [], []
         for k in range(n - 1):
             self._last_vec = (0.0, 0.0)
-            gaps.append(self._flow_px(smalls[k], smalls[k + 1]))  # type: ignore[arg-type]
+            gaps.append(self._flow_px(gray_samples[k], gray_samples[k + 1]))
             vecs.append(self._last_vec)
         # flow under-reads moves larger than a feature's own width (thin strokes at whip speed);
         # a stratum that is not the blend of its neighbours is under-sampled whatever flow says
@@ -334,8 +361,8 @@ class Compositor:
         for k in range(1, n - 1):
             if max(gaps[k - 1], gaps[k]) > 2 * _GAP_PX:  # flow already asked for subdivision
                 continue
-            blend = cv2.addWeighted(smalls[k - 1], 0.5, smalls[k + 1], 0.5, 0.0)  # type: ignore[arg-type]
-            if int(cv2.absdiff(smalls[k], blend).max()) > _MID_TOL * 2:  # type: ignore[arg-type]
+            blend = cv2.addWeighted(gray_samples[k - 1], 0.5, gray_samples[k + 1], 0.5, 0.0)
+            if int(np.max(cv2.absdiff(gray_samples[k], blend))) > _MID_TOL * 2:
                 st["undersampled"] += 1
                 flagged = True
                 gaps[k - 1], gaps[k] = max(gaps[k - 1], full), max(gaps[k], full)
@@ -346,14 +373,14 @@ class Compositor:
             need = [1 + int((m - 1) * budget / extra) for m in need]
         parts: list[tuple[np.ndarray, float]] = []
         rendered = n
-        seq = [(us[k], smalls[k]) for k in range(n)]  # every rendered sub-frame (time, 1/8 gray)
+        seq = [(us[k], gray_samples[k]) for k in range(n)]  # every rendered sub-frame (time, 1/8 gray)
         for k in range(n):
             m = need[k]
             if m == 1:
-                parts.append((rgbs[k], self._tent(us[k]) / n))  # type: ignore[arg-type]
+                parts.append((_require_sample(rgbs[k]), self._tent(us[k]) / n))
                 continue
             j0 = min(int(jit[k] * m), m - 1)  # sub-stratum already holding the base sample
-            parts.append((rgbs[k], self._tent(us[k]) / (n * m)))  # type: ignore[arg-type]
+            parts.append((_require_sample(rgbs[k]), self._tent(us[k]) / (n * m)))
             rgbs[k] = None
             sub = rng.random(m)
             for j in range(m):
@@ -385,13 +412,13 @@ class Compositor:
         fx = np.zeros((sh, sw), np.float32)
         fy = np.zeros((sh, sw), np.float32)
         if self._dis is None:
-            self._dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_ULTRAFAST)
+            self._dis = cv2.DISOpticalFlow.create(cv2.DISOPTICAL_FLOW_PRESET_ULTRAFAST)
         k3 = np.ones((3, 3), np.uint8)
         for (_, a), (_, b) in zip(seq, seq[1:]):
             d = cv2.absdiff(a, b)
-            if int(d.max()) <= _STATIC_TOL:
+            if int(np.max(d)) <= _STATIC_TOL:
                 continue
-            flow = self._dis.calc(a, b, None)
+            flow = _calc_flow(self._dis, a, b)
             np.nan_to_num(flow, copy=False)
             mag = cv2.magnitude(flow[..., 0], flow[..., 1])
             # only where the pair changed (dilated: an edge's flow belongs to both of its sides)
@@ -401,19 +428,20 @@ class Compositor:
             fx[sel] = flow[..., 0][sel]
             fy[sel] = flow[..., 1][sel]
         scale = self.W / float(sw)
-        peak = float(best.max()) * scale
+        peak = float(np.max(best)) * scale
         self.stats["max_step_px"] = max(float(self.stats.get("max_step_px", 0.0)), round(peak, 2))
         if peak <= _FILL_PX:
             return None
         # grow over the swept path: magnitude-weighted average of the vectors around each pixel
-        r = 1 + int(math.ceil(float(best.max())))
+        r = 1 + int(math.ceil(float(np.max(best))))
         ksz = (2 * r + 1, 2 * r + 1)
         w = best * best + 1e-6
         wx = cv2.boxFilter(fx * w, -1, ksz, normalize=False)
         wy = cv2.boxFilter(fy * w, -1, ksz, normalize=False)
         ws = cv2.boxFilter(w, -1, ksz, normalize=False)
         grown = cv2.dilate(best, np.ones(ksz, np.uint8))
-        vx, vy = wx / ws, wy / ws
+        vx = cast(NDArray[np.float32], wx / ws)
+        vy = cast(NDArray[np.float32], wy / ws)
         vm = cv2.magnitude(vx, vy) + 1e-6
         k = np.where(grown * scale > _FILL_PX * 0.5, grown / vm, 0.0).astype(np.float32)
         return (vx * k * scale).astype(np.float32), (vy * k * scale).astype(np.float32), peak
@@ -443,9 +471,9 @@ class Compositor:
             return
         sh, sw = vx_s.shape
         kx, ky = self.W / float(sw), self.H / float(sh)
-        mpx = min(float(cv2.magnitude(vx_s, vy_s).max()), lim)
-        x0 = max(0, int(xs.min() * kx - mpx) - 2); x1 = min(self.W, int((xs.max() + 1) * kx + mpx) + 2)
-        y0 = max(0, int(ys.min() * ky - mpx) - 2); y1 = min(self.H, int((ys.max() + 1) * ky + mpx) + 2)
+        mpx = min(float(np.max(cv2.magnitude(vx_s, vy_s))), lim)
+        x0 = max(0, int(np.min(xs) * kx - mpx) - 2); x1 = min(self.W, int((np.max(xs) + 1) * kx + mpx) + 2)
+        y0 = max(0, int(np.min(ys) * ky - mpx) - 2); y1 = min(self.H, int((np.max(ys) + 1) * ky + mpx) + 2)
         vx = cv2.resize(vx_s, (self.W, self.H), interpolation=cv2.INTER_LINEAR)[y0:y1, x0:x1]
         vy = cv2.resize(vy_s, (self.W, self.H), interpolation=cv2.INTER_LINEAR)[y0:y1, x0:x1]
         if self._grid_xy is None:
@@ -457,8 +485,8 @@ class Compositor:
         src = acc  # full frame: taps may reach outside the box
         cur = np.ascontiguousarray(acc[y0:y1, x0:x1])
         for lv in range(levels):
-            f = _SMEAR_SPAN * 0.5 ** (lv + 2)  # +-V/4, +-V/8, ... (x span): 2^levels taps over the step
-            ox, oy = vx * f, vy * f
+            tap_fraction = _SMEAR_SPAN * 0.5 ** (lv + 2)  # +-V/4, +-V/8, ... (x span): 2^levels taps over the step
+            ox, oy = vx * tap_fraction, vy * tap_fraction
             if lv == 0:
                 a = cv2.remap(src, gx + ox, gy + oy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
                 b = cv2.remap(src, gx - ox, gy - oy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
@@ -521,7 +549,7 @@ class Compositor:
 
         def scaled(ch: np.ndarray, f: float, dst: np.ndarray) -> np.ndarray:
             # destination x' = c + f (x - c)  <-  source x = c + (x' - c) / f
-            m = np.float32([[1 / f, 0, cx - cx / f], [0, 1 / f, cy - cy / f]])
+            m = np.array([[1 / f, 0, cx - cx / f], [0, 1 / f, cy - cy / f]], dtype=np.float32)
             return cv2.warpAffine(ch, m, (self.W, self.H), dst=dst, flags=cv2.INTER_LINEAR,
                                   borderMode=cv2.BORDER_REFLECT)
         rr = scaled(r, 1 + k, self._b1[..., 0].copy())
@@ -576,6 +604,7 @@ class Compositor:
         if use_grain:
             pick = _hash32(i, 0x6A0, self.seed) % len(self.grain_fields)  # re-seeded per frame
             field = self._field(self.grain_fields[pick], i, 0x6A1, self._m3)
+            assert L8 is not None  # populated above whenever grain is enabled
             wl = cv2.LUT(L8, self._grain_w, dst=self._m1)
             g = cv2.multiply(field, wl, dst=self._m1, scale=gr * 0.5)
             noise = g if noise is None else cv2.add(g, noise, dst=self._m1)

@@ -38,4 +38,4 @@ arguments, and set the environment variable `PYTHONPATH=/path/to/kinetic-studio`
 
 ## Notes
 
-- The server needs ffmpeg wherever OpenHands runs it (inside its sandbox for the web app). Alternatively run `kstudio-mcp --http 0.0.0.0:8765` on the host and add it as a Streamable HTTP server.
+- The server needs ffmpeg wherever OpenHands runs it (inside its sandbox for the web app). Alternatively run `kstudio-mcp --http 8765` on the host and add it as a Streamable HTTP server. This binds to localhost. The transport has no authentication: use `--http 0.0.0.0:8765` only when sandbox access requires it and the network and clients are trusted; never expose it directly to the public internet.

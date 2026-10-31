@@ -29,8 +29,10 @@
 
 A small JSON spec (scenes on a beat grid plus timeline markers) becomes a finished MP4 with
 original procedural music and sound design, mixed to -14 LUFS and checked by an automatic audit.
-No API key, no account, no render credits, no stock-music licences: everything is generated on
-your CPU. Each demo above is rendered from the matching spec in [`examples/`](examples).
+The core renderer generates video and procedural audio on your CPU without API keys, accounts,
+render credits or stock-music licences. The optional [swap backend](docs/SWAP.md) instead sends
+your chosen video and character image to the ComfyUI server you configure; review that data
+boundary before enabling it. Each demo above comes from its matching spec in [`examples/`](examples).
 
 ## 30-second quickstart
 
@@ -70,11 +72,11 @@ bin/kstudio render my-reel         # -> my-reel/out/my-reel_reel.mp4 + audit rep
 [plain Python](docs/quickstarts/python.md) ·
 [shell / curl](docs/quickstarts/shell.md)
 
-Four ways in, one engine and one JSON contract:
+15 quickstart pages cover these integrations. Four ways in, one engine and one JSON contract:
 
 | interface | how |
 |---|---|
-| MCP server | `kstudio-mcp` or `python -m kstudio.mcp_server`: stdio by default, streamable HTTP with `--http 8765`; tools `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (with progress), `audit` |
+| MCP server | `kstudio-mcp` or `python -m kstudio.mcp_server`: stdio by default, streamable HTTP with `--http 8765`; tools `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (with progress), `audit`, plus `swap` (requires an optional configured backend): nine advertised tools, eight core plus swap |
 | Function calling | strict tool schemas in [`docs/tools/`](docs/tools/README.md), dispatched with `kstudio.mcp_server.run_tool(name, arguments)` |
 | Command line | `kstudio --json <command>` prints one JSON object; stable exit codes (`kstudio exit-codes`) |
 | Skill | [`SKILL.md`](SKILL.md) (also at [`skills/kinetic-studio/`](skills/kinetic-studio/SKILL.md)): workflow, beat rules, spec contract, per-mode writing rules |
@@ -86,10 +88,10 @@ For model readers: [`llms.txt`](llms.txt) and [`llms-full.txt`](llms-full.txt).
 - **Five modes**, each with an example spec, theme, music style, camera feel and default
   transition: `kinetic` (type teasers), `explainer`, `promo` (app and product launches), `data`
   (counters and charts) and `social` (quotes and karaoke captions).
-- **31 scene types**, usable in any mode: slams, stacks, marquees, 3D type, scrambles, countdowns,
+- **32 scene types**, usable in any mode: slams, stacks, marquees, 3D type, scrambles, countdowns,
   bursts; covers, definitions, diagrams, bullets, key facts; device mock-ups, feature lists, calls to
   action, brand cards; counters, line, candlestick and bar charts, stat grids, tickers; hooks,
-  quotes, karaoke, follow cards; titles, text, images, logos, end cards. See [`docs/SCENES.md`](docs/SCENES.md).
+  quotes, karaoke, follow cards; titles, text, images, logos, end cards and local video clips. See [`docs/SCENES.md`](docs/SCENES.md).
 - **Beat-locked timing**: lengths and times in beats and bars (`"4b"`, `"1/2b"`, `"bar3"`) or named
   markers with offsets (`"drop-2b"`); sections with energy 0-3 drive music layers and camera;
   `snap` puts seconds on the grid; tempo and downbeat are detected from your own music file.
@@ -117,7 +119,7 @@ flowchart LR
     B[Brief] -->|agent or you| S[spec.json]
     S --> V[Schema validation<br/>paths · hints]
     V --> T[Timeline<br/>markers · beat grid · sections]
-    T --> F[Film<br/>31 scene types · 13 transitions · camera]
+    T --> F[Film<br/>32 scene types · 13 transitions · camera]
     F --> R[Parallel renderer<br/>Skia · motion blur · grade · grain]
     R --> C[libx264 chunks<br/>verified + resumable]
     T --> A[Audio<br/>procedural music + SFX]
@@ -146,6 +148,10 @@ bin/kstudio doctor
 ```
 
 `pip install .` puts `kstudio`, `kinetic-studio` and `kstudio-mcp` on your PATH.
+Runtime distributions bundle examples, fonts, workflows and required notices; they are not a
+complete offline copy of the repository documentation and demo gallery. For all quickstarts,
+tool-schema exports, scripts and demos, use the
+[full GitHub repository](https://github.com/28naem-del/kinetic-studio).
 
 ## Command line
 
@@ -160,12 +166,17 @@ bin/kstudio doctor
 | `kstudio info <spec>` | resolved timeline and beat-grid lint |
 | `kstudio preview <spec> [-o DIR] [--at T] [--preset P] [--scale S]` | stills and a contact sheet |
 | `kstudio render <spec> [-o OUT] [--preset P] [--fps N] [--quality draft\|standard\|high] [--4k] [--workers N] [--fresh] [--snap] [--no-audit]` | the final MP4 (parallel, resumable, audited) |
-| `kstudio audit <video> [--mode M]` | audit any finished video |
+| `kstudio audit <video> [--mode M]` | audit a supported finished video |
 | `kstudio mix <spec>` · `beats <audio>` · `sfx <dir>` | soundtrack only · tempo detection · export the sound kit |
 | `kstudio doctor` · `exit-codes` | check dependencies · print the exit-code table |
 
 `<spec>` is a project folder or a `spec.json`. Add `--json` to any command for one JSON object on
 stdout ([`docs/CLI.md`](docs/CLI.md)). Presets: `reel`/`story` (9:16), `landscape`/`youtube` (16:9), `square` (1:1), `portrait` (4:5).
+
+Audits use `reference-1080-v2`: coded short edge >=144 px, long edge <=4096 px and <=9M pixels,
+with a bounded, no-upscale analysis grid. Tiny/extreme geometry, explicit non-square pixels or
+nonidentity rotation are rejected, not waived. Thresholds stay unchanged; non-1080 sampled metrics
+can change. See the [audit input policy and measurement basis](docs/CLI.md#audit-input-policy-and-measurement-basis).
 
 ## Docs
 
@@ -181,8 +192,12 @@ stdout ([`docs/CLI.md`](docs/CLI.md)). Presets: `reel`/`story` (9:16), `landscap
 
 ## FAQ
 
-**Does it need a GPU or an API key?** No. It renders on the CPU with Skia and FFmpeg and makes no
-network calls. The MCP server uses only the Python standard library.
+**Does it need a GPU or an API key?** The core renderer needs neither: it runs on the CPU with
+Skia and FFmpeg without network calls after installation. The MCP transport uses only the Python
+standard library. Optional [swap](docs/SWAP.md) uses a separately configured ComfyUI/GPU backend
+and uploads the input video and character image to it; a clip with `source.swap` may trigger that
+request during rendering when configured. Only enable it for inputs you agree to share with that
+server. HTTP MCP access is unauthenticated: keep it on localhost or a trusted network.
 
 **Can I use my own music?** Yes: `"music": {"file": "track.mp3"}`. Tempo and beat phase are
 detected so beat-measured scenes land on the beat. You are responsible for the track's rights.

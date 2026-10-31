@@ -648,3 +648,14 @@ def test_clip_swap_source_plays_the_input_for_wrong_port_replies(tmp_path, capsy
     err = capsys.readouterr().err
     assert "BACKEND_UNREACHABLE" in err and "playing the input video" in err and "BadStatusLine" not in err
     assert not backend.uploads
+
+
+@pytest.mark.parametrize("reply", [{"status": "ok"}, {}, {"LoadImage": "not a node"}])
+def test_generic_json_backend_is_exit_7(capsys, backend, inputs, tmp_path, reply):
+    backend.object_info = reply
+    v, c = inputs
+    out = tmp_path / "x.mp4"
+    result, err = run(capsys, "--video", v, "--character", c, "-o", str(out), code=7)
+    assert result["error"]["reason"] == "not_comfyui"
+    assert not backend.uploads
+    _no_leak(result, err, out, tmp_path)

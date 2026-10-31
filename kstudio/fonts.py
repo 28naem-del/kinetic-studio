@@ -7,6 +7,11 @@ from functools import cache, lru_cache
 
 import skia
 
+from .font_paths import ALIASES as ALIASES
+from .font_paths import FAMILIES as FAMILIES
+from .font_paths import FONT_DIR as FONT_DIR
+from .font_paths import resolve_font_path
+
 
 def _init_fontmgr_quietly() -> None:
     """Initialise Skia's font manager once with stderr muted. Fonts are always loaded from the
@@ -28,18 +33,6 @@ def _init_fontmgr_quietly() -> None:
 
 _init_fontmgr_quietly()
 
-FONT_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
-
-FAMILIES = {
-    "Archivo": "Archivo.ttf",            # wght 100-900, wdth 62-125: kinetic display
-    "Inter": "Inter.ttf",                # wght 100-900, opsz 14-32: UI / body
-    "Fraunces": "Fraunces.ttf",          # wght 100-900, opsz 9-144, SOFT, WONK: editorial serif
-    "JetBrainsMono": "JetBrainsMono.ttf",  # wght 100-800: data, code, tickers
-    "SpaceGrotesk": "SpaceGrotesk.ttf",  # wght 300-700: tech / product headings
-}
-ALIASES = {"display": "Archivo", "sans": "Inter", "serif": "Fraunces", "mono": "JetBrainsMono",
-           "grotesk": "SpaceGrotesk"}
-
 _VP = skia.FontArguments.VariationPosition
 
 
@@ -53,15 +46,7 @@ def _untag(t: int) -> str:
 
 @cache
 def _base(family: str) -> skia.Typeface:
-    fam = ALIASES.get(family, family)
-    fn = FAMILIES.get(fam)
-    if fn is None:
-        if os.path.isfile(family):  # user-supplied font file
-            tf = skia.Typeface.MakeFromFile(family)
-        else:
-            raise KeyError(f"unknown font family {family!r}; bundled: {sorted(FAMILIES)}")
-    else:
-        tf = skia.Typeface.MakeFromFile(os.path.join(FONT_DIR, fn))
+    tf = skia.Typeface.MakeFromFile(resolve_font_path(family))
     if tf is None:
         raise RuntimeError(f"failed to load font {family}")
     return tf

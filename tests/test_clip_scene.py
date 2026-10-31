@@ -180,3 +180,18 @@ def test_example_validates_and_renders_draft(tmp_path):
                                       "-show_entries", "stream=nb_read_frames,width,height", "-of", "json", path],
                                      capture_output=True, text=True, check=True).stdout)["streams"][0]
     assert int(info["nb_read_frames"]) == n and (info["width"], info["height"]) == (out.width, out.height)
+
+
+def test_decode_key_tracks_content_not_location_or_mtime(tmp_path):
+    from kstudio.scenes.clip import DecodePlan
+    a, b = tmp_path / "a.mp4", tmp_path / "b.mp4"
+    a.write_bytes(b"AAAA")
+    b.write_bytes(b"AAAA")
+    def plan(path):
+        return DecodePlan(str(path), 0, 1, 30, (0, 0, 2, 2), (2, 2), "null", 0)
+    first = plan(a).key()
+    assert first == plan(b).key()
+    before = a.stat()
+    a.write_bytes(b"BBBB")
+    os.utime(a, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert first != plan(a).key()

@@ -3,7 +3,6 @@ audit, delivery true peak / VBV, end-card contrast and the 4 % overshoot cap."""
 from __future__ import annotations
 
 import inspect
-import math
 import re
 from pathlib import Path
 
@@ -12,6 +11,7 @@ import pytest
 import skia
 
 from kstudio import audit as A
+from kstudio import draw as D
 from kstudio import ease as E
 from kstudio import render as RD
 from kstudio import transitions as TR
@@ -22,7 +22,6 @@ from kstudio.modes import MODES, THEMES
 from kstudio.presets import make_output
 from kstudio.scenes.common import contrast_ratio, cta_colors, ground_samples, readable
 from kstudio.spec import load_spec
-from kstudio import draw as D
 
 ROOT = Path(__file__).resolve().parent.parent
 

@@ -112,3 +112,21 @@ def test_brief_pack_embeds_schema_examples_and_rules(mode):
 def test_brief_rejects_unknown_mode():
     with pytest.raises(KeyError):
         brief.prompt_pack("x", "nope")
+
+
+@pytest.mark.parametrize("source", [
+    {"swap": {"video": "v.mp4", "character": "c.png", "seed": -1}},
+    {"swap": {"video": "v.mp4"}},
+    {"swap": {"video": "v.mp4", "character": "c.png", "mode": "unknown"}},
+    {"swap": {"video": "v.mp4", "character": "c.png", "seed": True}},
+    {"other": {}},
+])
+def test_clip_source_schema_rejects_invalid_requests(source):
+    js = pytest.importorskip("jsonschema")
+    validator = js.Draft202012Validator(schema.spec_schema())
+    assert list(validator.iter_errors({"scenes": [{"type": "clip", "source": source}]}))
+
+
+@pytest.mark.parametrize("mode", MODE_EXAMPLES)
+def test_brief_offers_footage_in_every_mode(mode):
+    assert "clip" in brief.prompt_pack("Footage with captions", mode)["scene_types"]

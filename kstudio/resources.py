@@ -85,10 +85,13 @@ def mem_available_mb() -> float:
 
 
 def cpu_count() -> int:
-    try:
-        return len(os.sched_getaffinity(0))
-    except AttributeError:
-        return os.cpu_count() or 2
+    affinity = getattr(os, "sched_getaffinity", None)
+    if affinity is not None:
+        try:
+            return len(affinity(0))
+        except AttributeError:
+            pass
+    return os.cpu_count() or 2
 
 
 def per_worker_mb(width: int, height: int, samples: int = 3) -> float:

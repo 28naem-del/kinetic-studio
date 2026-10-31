@@ -308,6 +308,24 @@ def scene_definition(name: str, cls: type, examples: dict[str, Any] | None = Non
         if ex is not None and len(json.dumps(ex, default=str)) <= 160:
             p["examples"] = [ex]
         props[k] = p
+    if name == "clip":
+        from .spec import SWAP_MODES
+        props["source"] = {
+            "anyOf": [
+                {"type": "null"},
+                {"type": "object", "maxProperties": 0},
+                {"type": "object", "required": ["swap"], "additionalProperties": False,
+                 "properties": {"swap": {
+                     "type": "object", "required": ["video", "character"], "additionalProperties": False,
+                     "properties": {
+                         "video": {"type": "string", "minLength": 1},
+                         "character": {"type": "string", "minLength": 1},
+                         "mode": {"enum": list(SWAP_MODES)},
+                         "prompt": {"type": "string"}, "target": {"type": "string"},
+                         "seed": {"type": "integer", "minimum": 0},
+                     }}}},
+            ], "description": "Optional Openjutsu source; without a backend the input video is used.",
+        }
     doc = inspect.cleandoc(cls.__doc__ or "")
     return {"type": "object", "title": name, "description": " ".join(doc.split()),
             "properties": props, "required": ["type"], "additionalProperties": False}

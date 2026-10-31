@@ -230,6 +230,7 @@ class Comfy:
                             timeout=max(self.timeout, 300.0)) as r:
                 info = self._decode("/upload/image", self._read(r), b"{}")
         except urllib.error.HTTPError as e:
+            e.close()
             raise RenderFailed(f"the swap backend refused the upload of {name}: HTTP {e.code}",
                                code="UPLOAD_FAILED") from None
         if not isinstance(info, dict):
@@ -257,9 +258,14 @@ class Comfy:
         try:
             info = self.get_json("/object_info")
         except urllib.error.HTTPError as e:
+            e.close()
             raise self.not_comfyui("/object_info", f"HTTP {e.code}") from None
         if not isinstance(info, dict):
             raise self.not_comfyui("/object_info", f"JSON that is not a node list ({type(info).__name__})")
+        # A generic JSON API is not a ComfyUI registry missing custom nodes.
+        core = {"KSampler", "LoadImage", "CLIPTextEncode"}
+        if not any(isinstance(info.get(c), dict) and isinstance(info[c].get("input"), dict) for c in core):
+            raise self.not_comfyui("/object_info", "JSON without ComfyUI core node definitions")
         return [c for c in classes if c not in info]
 
     def download(self, item: dict[str, Any], dest: str) -> int:
@@ -282,6 +288,7 @@ class Comfy:
                 raise RenderFailed("the swap backend returned an empty video", code="NO_OUTPUT")
             os.replace(tmp, dest)
         except urllib.error.HTTPError as e:
+            e.close()
             raise RenderFailed(f"could not download the swapped video: HTTP {e.code}", code="DOWNLOAD_FAILED") from None
         finally:
             with contextlib.suppress(OSError):
@@ -298,8 +305,10 @@ def _node_hint(text: str) -> str:
 def _rejected(e: urllib.error.HTTPError) -> RenderFailed:
     try:
         body = json.loads(e.read() or b"{}")
-    except (ValueError, OSError):
+    except (ValueError, OSError, http.client.HTTPException):
         body = {}
+    finally:
+        e.close()
     err = body.get("error") if isinstance(body, dict) else None
     msg = err.get("message") if isinstance(err, dict) else str(err or f"HTTP {e.code}")
     text = json.dumps(body)
@@ -309,10 +318,14 @@ def _rejected(e: urllib.error.HTTPError) -> RenderFailed:
 
 
 def _execution_error(status: dict[str, Any]) -> str:
-    for m in status.get("messages") or []:
+    messages = status.get("messages")
+    if not isinstance(messages, list):
+        return "the workflow failed"
+    for m in messages:
         if isinstance(m, list) and len(m) == 2 and m[0] == "execution_error" and isinstance(m[1], dict):
             d = m[1]
-            return f"{d.get('node_type', 'node')} ({d.get('node_id', '?')}): {d.get('exception_message', '').strip()}"
+            message = str(d.get("exception_message") or "the workflow failed").strip()
+            return f"{d.get('node_type', 'node')} ({d.get('node_id', '?')}): {message}"
     return "the workflow failed"
 
 
@@ -321,7 +334,10 @@ def find_video(outputs: dict[str, Any], graph: dict[str, Any]) -> dict[str, Any]
     final = [k for k, n in graph.items() if n.get("class_type") == "MiniMaxH3ChainAssemble"]
     order = final + sorted(k for k in outputs if k not in final)
     for nid in order:
-        for key, items in (outputs.get(nid) or {}).items():
+        node_output = outputs.get(nid) or {}
+        if not isinstance(node_output, dict):
+            continue
+        for key, items in node_output.items():
             if not isinstance(items, list):
                 continue
             for it in items:
@@ -384,8 +400,12 @@ def run_swap(video: str, character: str, mode: str = "simple", prompt: str = "",
     while True:
         try:
             hist = api.get_json(f"/history/{urllib.parse.quote(pid)}")
+            if not isinstance(hist, dict):
+                raise api.not_comfyui("/history", "JSON that is not a history object")
             hiccups = 0
         except (BackendUnreachable, urllib.error.HTTPError) as e:
+            if isinstance(e, urllib.error.HTTPError):
+                e.close()
             hiccups += 1  # a busy GPU box or its proxy can drop a poll; give up after a few in a row
             if isinstance(e, BackendUnreachable) and e.details.get("reason") == "not_comfyui":
                 raise
@@ -397,6 +417,10 @@ def run_swap(video: str, character: str, mode: str = "simple", prompt: str = "",
         entry = hist.get(pid) if isinstance(hist, dict) else None
         if isinstance(entry, dict):
             status = entry.get("status") or {}
+            if not isinstance(status, dict) or not isinstance(entry.get("outputs", {}), dict):
+                raise api.not_comfyui("/history", "malformed prompt status or outputs")
+            if status.get("messages") is not None and not isinstance(status["messages"], list):
+                raise api.not_comfyui("/history", "prompt messages that are not a list")
             if status.get("status_str") == "error":
                 msg = _execution_error(status)
                 raise RenderFailed(f"the swap failed on the backend: {msg}", code="SWAP_FAILED", prompt_id=pid,
@@ -407,11 +431,20 @@ def run_swap(video: str, character: str, mode: str = "simple", prompt: str = "",
                     raise RenderFailed("the swap finished without a video output", code="NO_OUTPUT", prompt_id=pid)
                 break
         stage, pos = "running", None
-        with contextlib.suppress(BackendUnreachable, urllib.error.HTTPError, ValueError):
+        try:
             q = api.get_json("/queue") or {}
-            pending = [x[1] for x in q.get("queue_pending") or [] if isinstance(x, list) and len(x) > 1]
+            if not isinstance(q, dict):
+                raise api.not_comfyui("/queue", "JSON that is not a queue object")
+            pending_items = q.get("queue_pending") or []
+            if not isinstance(pending_items, list):
+                raise api.not_comfyui("/queue", "queue_pending that is not a list")
+            pending = [x[1] for x in pending_items if isinstance(x, list) and len(x) > 1]
             if pid in pending:
                 stage, pos = "queued", pending.index(pid) + 1
+        except urllib.error.HTTPError as e:
+            e.close()  # queue position is optional progress, not the job result
+        except (BackendUnreachable, ValueError):
+            pass
         emit({"stage": stage, "position": pos, "elapsed": round(time.monotonic() - t_start, 1), "prompt_id": pid})
         if time.monotonic() > deadline:
             raise RenderFailed(f"the swap did not finish within {timeout:.0f} s", code="SWAP_TIMEOUT", prompt_id=pid,

@@ -10,7 +10,7 @@ frameworks branch on them without parsing text.
     4    render failure (the spec was valid but rendering, encoding or muxing failed)
     5    audit failed (a video was written but the quality audit did not pass)
     6    missing tool (ffmpeg / ffprobe / libx264 / node not installed)
-    7    backend unreachable (reserved for a pluggable render backend; not raised yet)
+    7    swap backend unavailable, unconfigured, or not a ComfyUI API
     130  interrupted (Ctrl-C); re-run the same command to resume from finished chunks
 """
 from __future__ import annotations
@@ -43,7 +43,7 @@ EXIT_TABLE: dict[Exit, tuple[str, tuple[str, ...]]] = {
                          ("RENDER_FAILED",)),
     Exit.AUDIT_FAILED: ("audit failed: the video was written but the quality audit did not pass", ("AUDIT_FAILED",)),
     Exit.MISSING_TOOL: ("missing tool: ffmpeg, ffprobe, libx264 or node is not installed", ("MISSING_TOOL",)),
-    Exit.BACKEND_UNREACHABLE: ("backend unreachable (reserved for a pluggable render backend)",
+    Exit.BACKEND_UNREACHABLE: ("swap backend unavailable, unconfigured, or not a ComfyUI API",
                                ("BACKEND_UNREACHABLE",)),
     Exit.INTERRUPTED: ("interrupted; re-run the same command to resume from finished chunks", ("INTERRUPTED",)),
 }
@@ -105,7 +105,7 @@ class MissingTool(CliError):
 
 
 class BackendUnreachable(CliError):
-    """Reserved: raised by a future remote/pluggable render backend that cannot be reached."""
+    """The optional swap backend is unconfigured, unreachable, or not a ComfyUI API."""
     exit = Exit.BACKEND_UNREACHABLE
     code = "BACKEND_UNREACHABLE"
 

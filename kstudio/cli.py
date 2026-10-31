@@ -23,7 +23,7 @@ Machine use: every command takes --json (or set KSTUDIO_JSON=1). stdout then car
 object: {"ok", "command", "version", "exit_code", ...result} or, on failure, the same envelope with
 "error": {"code", "message", "path", "hint", "errors": [...]}. Logs and progress (JSON lines) go to
 stderr. Exit codes are fixed (kstudio/exitcodes.py, docs/CLI.md): 0 ok, 1 internal, 2 usage,
-3 invalid spec, 4 render failure, 5 audit failed, 6 missing tool, 7 backend unreachable (reserved),
+3 invalid spec, 4 render failure, 5 audit failed, 6 missing tool, 7 backend unreachable,
 130 interrupted.
 """
 from __future__ import annotations

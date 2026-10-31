@@ -13,6 +13,8 @@ from typing import Any
 
 import numpy as np
 
+from .exitcodes import AuditFailed
+
 STILL_THRESHOLD = 0.6     # raw metric: mean abs luma diff (0-255) at 1/8 scale below which a frame is "still"
 # Motion is judged on a grain-free basis. Film grain is re-seeded every frame, so on the delivered file
 # every frame differs from the last by ~2-3 levels at 1/8 scale (well over STILL_THRESHOLD) and the raw
@@ -26,6 +28,72 @@ STILL_THRESHOLD = 0.6     # raw metric: mean abs luma diff (0-255) at 1/8 scale 
 MOTION_GATE = 1.75
 BLACK_THRESHOLD = 10.0    # mean luma below which a frame counts as black
 
+# Reference-v2 preserves existing default-preset/master grids, not a claim of
+# archived universal perceptual calibration. Unsupported geometry fails closed.
+MOTION_REFERENCE_SHORT_EDGE = 1080
+AUDIT_MIN_SHORT_EDGE = 144
+AUDIT_MAX_INPUT_EDGE = 4096
+AUDIT_MAX_INPUT_PIXELS = 9_000_000
+AUDIT_MAX_ANALYSIS_EDGE = 512
+AUDIT_MAX_ANALYSIS_PIXELS = 65_536
+MOTION_BASIS_VERSION = "reference-1080-v2"
+
+
+def motion_analysis_size(width: int, height: int) -> tuple[int, int]:
+    """Bounded, no-upscale reference grid; reject unsupported media, never waive it.
+
+    Supported coded dimensions: short edge >=144, long edge <=4096, <=9M pixels.
+    The normalized even grid must fit the source, <=512 per axis and <=65536 pixels.
+    Limits deliberately reject extreme ratios rather than changing the motion bar.
+    """
+    if (isinstance(width, bool) or isinstance(height, bool)
+            or not isinstance(width, int) or not isinstance(height, int)
+            or min(width, height) < AUDIT_MIN_SHORT_EDGE
+            or max(width, height) > AUDIT_MAX_INPUT_EDGE
+            or width * height > AUDIT_MAX_INPUT_PIXELS):
+        raise AuditFailed("unsupported audit input dimensions", reason="unsupported_geometry",
+                          width=width, height=height, basis=MOTION_BASIS_VERSION)
+    short = min(width, height)
+    w = (width * MOTION_REFERENCE_SHORT_EDGE // short // 8) // 2 * 2
+    h = (height * MOTION_REFERENCE_SHORT_EDGE // short // 8) // 2 * 2
+    if (min(w, h) < 16 or w > width or h > height
+            or max(w, h) > AUDIT_MAX_ANALYSIS_EDGE
+            or w * h > AUDIT_MAX_ANALYSIS_PIXELS):
+        raise AuditFailed("unsupported audit aspect ratio or analysis allocation", reason="unsupported_geometry",
+                          width=width, height=height, analysis_size=[w, h], basis=MOTION_BASIS_VERSION)
+    return w, h
+
+
+def _validate_audit_video(video: dict[str, Any]) -> None:
+    """Reject non-square-pixel or rotated inputs before decoder/timing work.
+
+    Absent/N/A/0:1 SAR is treated as unspecified square pixels, as FFmpeg does.
+    Explicit non-unit SAR and nonidentity rotation need separate normalization.
+    """
+    motion_analysis_size(video.get("width", 0), video.get("height", 0))
+    if video.get("sample_aspect_ratio") not in (None, "N/A", "0:1", "1:1"):
+        raise AuditFailed("unsupported audit sample aspect ratio", reason="unsupported_display_geometry",
+                          sample_aspect_ratio=video.get("sample_aspect_ratio"), basis=MOTION_BASIS_VERSION)
+    tags = video.get("tags", {})
+    side_data = video.get("side_data_list", [])
+    if tags is None:
+        tags = {}
+    if side_data is None:
+        side_data = []
+    if (not isinstance(tags, dict) or not isinstance(side_data, list)
+            or any(not isinstance(item, dict) for item in side_data)):
+        raise AuditFailed("unsupported audit display metadata", reason="unsupported_display_geometry",
+                          basis=MOTION_BASIS_VERSION)
+    rotations = [tags.get("rotate", 0)]
+    rotations.extend(item.get("rotation", 0) for item in side_data)
+    try:
+        identity = all(float(rotation) % 360 == 0 for rotation in rotations)
+    except (TypeError, ValueError):
+        identity = False
+    if not identity:
+        raise AuditFailed("unsupported audit rotation", reason="unsupported_display_geometry",
+                          rotations=rotations, basis=MOTION_BASIS_VERSION)
+
 
 def probe(path: str) -> dict[str, Any]:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", path],
@@ -35,6 +103,7 @@ def probe(path: str) -> dict[str, Any]:
     a = next((s for s in d["streams"] if s["codec_type"] == "audio"), None)
     num, _, den = v.get("avg_frame_rate", "0/1").partition("/")
     lvl = v.get("level")
+    _validate_audit_video(v)
     from .render import video_timing
     vt = video_timing(path) if v else {}
     return {
@@ -55,10 +124,10 @@ def probe(path: str) -> dict[str, Any]:
 
 
 def motion_stats(path: str, width: int, height: int, fps: float) -> dict[str, Any]:
-    """Per-frame motion of a video at 1/8 scale (see MOTION_GATE): the denoised motion ratio and
+    """Per-frame motion on the bounded reference grid (see MOTION_GATE): the denoised motion ratio and
     longest hold, plus the raw grain-inclusive ratio, mean luma diff and black frames."""
-    w, h = max(16, width // 8) // 2 * 2, max(16, height // 8) // 2 * 2
-    proc = subprocess.Popen(["ffmpeg", "-v", "error", "-i", path, "-vf", f"scale={w}:{h}:flags=area,format=gray",
+    w, h = motion_analysis_size(width, height)
+    proc = subprocess.Popen(["ffmpeg", "-v", "error", "-noautorotate", "-i", path, "-vf", f"scale={w}:{h}:flags=area,format=gray",
                              "-f", "rawvideo", "-"], stdout=subprocess.PIPE)
     diffs: list[float] = []
     sq: list[float] = []    # mean squared 1-frame difference, frame k-1 -> k
@@ -80,7 +149,10 @@ def motion_stats(path: str, width: int, height: int, fps: float) -> dict[str, An
             d2 = f - win[0]
             sq2.append(float(np.dot(d2, d2)) / fsz)
         win = (win + [f])[-2:]
-    proc.wait()
+    returncode = proc.wait()
+    if returncode != 0 or len(lum) < 3 or buf:
+        raise AuditFailed("audit decode failed, incomplete, or shorter than three frames",
+                          reason="invalid_decode", returncode=returncode, frames_decoded=len(lum))
     d = np.array(diffs) if diffs else np.zeros(1)
     m = denoised_motion(sq, sq2) if diffs else np.zeros(1)
     still = m < MOTION_GATE
@@ -97,7 +169,9 @@ def motion_stats(path: str, width: int, height: int, fps: float) -> dict[str, An
     return {"frames_decoded": len(lum), "motion_ratio": round(float(1 - still.mean()), 3),
             "still_ratio": round(float(still.mean()), 3),
             "longest_hold_s": round(longest_run(still) / fps, 2) if fps else None,
-            "motion_basis": f"denoised (two-lag, gate {MOTION_GATE})",
+            "motion_basis": f"denoised (two-lag, gate {MOTION_GATE}, {MOTION_BASIS_VERSION})",
+            "motion_analysis_size": [w, h],
+            "black_basis": f"mean luma < {BLACK_THRESHOLD} on {MOTION_BASIS_VERSION}",
             "motion_ratio_raw": round(float(1 - raw_still.mean()), 3),
             "longest_hold_raw_s": round(longest_run(raw_still) / fps, 2) if fps else None,
             "mean_motion": round(float(d.mean()), 2), "black_frames": int((lum_a < BLACK_THRESHOLD).sum()),

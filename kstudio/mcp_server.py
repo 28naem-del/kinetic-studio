@@ -32,9 +32,10 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import __version__
 from .modes import MODES
@@ -835,7 +836,8 @@ class Server:
             return _error(msg.get("id") if isinstance(msg, dict) else None,
                           RpcError(INVALID_REQUEST, "expected a JSON-RPC 2.0 object"))
         method = msg.get("method")
-        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        params_value = msg.get("params")
+        params = params_value if isinstance(params_value, dict) else {}
         if "id" not in msg:
             if method == "notifications/cancelled":
                 ev = self.running.get(params.get("requestId"))
@@ -883,7 +885,8 @@ class Server:
         tool = find_tool(name)
         if tool is None:
             raise RpcError(INVALID_PARAMS, f"unknown tool: {name}", {"tools": [t.name for t in TOOLS]})
-        meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+        meta_value = params.get("_meta")
+        meta = meta_value if isinstance(meta_value, dict) else {}
         return tool, params.get("arguments"), meta.get("progressToken")
 
     def run_call(self, rid: Any, tool: Tool, args: Any, token: Any, version: str | None,
@@ -985,7 +988,7 @@ def make_http_server(host: str = "127.0.0.1", port: int = 0, allow_origins: list
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import urlparse
 
-    allow_origins = list(allow_origins or [])
+    allowed_origins = list(allow_origins or [])
     local_hosts = {"localhost", "127.0.0.1", "::1", "[::1]"}
     server = Server(lambda obj: None)
 
@@ -1009,7 +1012,7 @@ def make_http_server(host: str = "127.0.0.1", port: int = 0, allow_origins: list
             origin = self.headers.get("Origin")
             if not origin:
                 return True
-            if origin in allow_origins or "*" in allow_origins:
+            if origin in allowed_origins or "*" in allowed_origins:
                 return True
             return (urlparse(origin).hostname or "") in local_hosts
 
@@ -1034,7 +1037,8 @@ def make_http_server(host: str = "127.0.0.1", port: int = 0, allow_origins: list
             if not isinstance(msg, dict):
                 return self._json(400, _error(None, RpcError(INVALID_REQUEST, "expected one JSON-RPC object")))
             rid, method = msg.get("id"), msg.get("method")
-            params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+            params_value = msg.get("params")
+            params = params_value if isinstance(params_value, dict) else {}
             version = Server.era(params)
             header_v = self.headers.get("MCP-Protocol-Version")
             if version is not None:

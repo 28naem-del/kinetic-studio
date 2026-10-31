@@ -647,8 +647,9 @@ class Scramble(Scene):
     (default "1/8b"; seconds still work), each with a 1/4-beat pop; key clicks fall on the half
     beats of the resolve and the hit (SFX, camera, music) on the next whole beat after the last
     letter. The word is set across >= 85 % of the width. Below it a block of `rows` mono lines
-    keeps scrambling and resolves one line per beat to `lines` (optional list of strings) to
-    fill the lower half; `label` is the kicker above the word."""
+    resolves one line per beat to `lines` (optional list of strings), compressing the reveal
+    when needed to leave the second half of the scene for reading. Decorative rows keep
+    scrambling; `label` is the kicker above the word."""
     defaults = {"text": "DECRYPTED", "label": "", "stagger": "1/8b", "first": "1b", "role": "mono", "weight": 800,
                 "caret": True, "lines": [], "rows": 5}
 
@@ -726,7 +727,7 @@ class Scramble(Scene):
         draw_chrome(ctx, self, self.ground)
 
     def _matrix(self, ctx: Ctx, g: L.Grid, top: float, ink: str) -> None:
-        """Mono block under the word: scrambling rows that resolve one per beat to `lines`."""
+        """Resolve target rows early enough to hold; leave decorative rows animated."""
         n = int(self.p["rows"])
         if n <= 0:
             return
@@ -739,12 +740,18 @@ class Scramble(Scene):
         n = max(1, min(n, int((bottom - top) / pitch)))
         rnd = random.Random(int(math.floor(ctx.local_beat * 8)) * 131 + 7)
         first_beat = self.tl.beats_of(float(self.p["first"]), self.start)
+        # The old last lock could equal/exceed the cut (four lines in four beats).
+        # Compress only the matrix reveal clock, not the hero/cues/random clock.
+        # Keep half the scene for reading and its outgoing transition.
+        last_lock = first_beat + min(len(lines), n) - 1
+        reveal_end = self.tl.beats_of(self.dur * 0.5, self.start)
+        pace = min(1.0, reveal_end / last_lock) if last_lock > 0 else 1.0
         c = ctx.c
         for j in range(n):
             y = top + D.cap_height(f) + j * pitch
             target = lines[j] if j < len(lines) else ""
             lock_b = first_beat + j  # one line per beat from the first lock
-            u = ctx.local_beat - lock_b
+            u = ctx.local_beat / pace - lock_b
             appear = E.out_expo(E.clamp((ctx.local_beat + 0.25 - j * 0.125) / 0.5))
             if appear <= 0.01:
                 continue
