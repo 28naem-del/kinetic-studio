@@ -29,7 +29,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from .exitcodes import BackendUnreachable, CliError, MissingTool, RenderFailed, UsageError
+from .exitcodes import BackendUnreachable, MissingTool, RenderFailed, UsageError
 from .spec import SWAP_MODES, load_spec, swap_dir, swap_key, swap_requests
 
 ENV_URL = "KSTUDIO_COMFY_URL"
@@ -164,14 +164,33 @@ class Comfy:
             raise BackendUnreachable(f"swap backend unreachable at {self.url}: {reason}", reason="unreachable",
                                      url=self.url, hint=SETUP_HINT) from None
 
+    def _decode(self, path: str, raw: bytes, empty: bytes = b"null") -> Any:
+        """JSON body of a reply; anything else means the URL is not a ComfyUI API (a web page, a proxy
+        or login screen, a router answering for an unknown host, the wrong port)."""
+        try:
+            return json.loads(raw or empty)
+        except ValueError:
+            head = raw[:60].decode("utf-8", "replace").strip().replace("\n", " ")
+            raise BackendUnreachable(f"{self.url} answered {path} with something other than JSON ({head!r}); "
+                                     f"it is not a ComfyUI API", reason="not_comfyui", url=self.url,
+                                     hint=f"check the host and port in {ENV_URL}: it must point at ComfyUI itself "
+                                          f"(port 8188 by default), not a web page or proxy; see docs/SWAP.md") from None
+
+    def _read(self, r: Any) -> bytes:
+        try:
+            return bytes(r.read())
+        except (ConnectionError, TimeoutError, OSError) as e:
+            raise BackendUnreachable(f"swap backend unreachable at {self.url}: {e}", reason="unreachable",
+                                     url=self.url, hint=SETUP_HINT) from None
+
     def get_json(self, path: str) -> Any:
         with self._open(path) as r:
-            return json.loads(r.read() or b"null")
+            return self._decode(path, self._read(r))
 
     def post_json(self, path: str, body: Any) -> Any:
         data = json.dumps(body).encode()
         with self._open(path, data, {"Content-Type": "application/json"}) as r:
-            return json.loads(r.read() or b"null")
+            return self._decode(path, self._read(r))
 
     def upload(self, path: str) -> str:
         """Upload a file into ComfyUI's input folder; returns the name to put in a loader node."""
@@ -193,10 +212,12 @@ class Comfy:
         try:
             with self._open("/upload/image", body, {"Content-Type": f"multipart/form-data; boundary={boundary}"},
                             timeout=max(self.timeout, 300.0)) as r:
-                info = json.loads(r.read() or b"{}")
+                info = self._decode("/upload/image", self._read(r), b"{}")
         except urllib.error.HTTPError as e:
             raise RenderFailed(f"the swap backend refused the upload of {name}: HTTP {e.code}",
                                code="UPLOAD_FAILED") from None
+        if not isinstance(info, dict):
+            info = {}
         sub = str(info.get("subfolder") or "")
         got = str(info.get("name") or stored)
         return f"{sub}/{got}" if sub else got
@@ -344,9 +365,9 @@ def run_swap(video: str, character: str, mode: str = "simple", prompt: str = "",
         try:
             hist = api.get_json(f"/history/{urllib.parse.quote(pid)}")
             hiccups = 0
-        except BackendUnreachable:
+        except BackendUnreachable as e:
             hiccups += 1  # a busy GPU box can drop a poll; give up after a few in a row
-            if hiccups >= 5:
+            if hiccups >= 5 or e.details.get("reason") == "not_comfyui":
                 raise
             hist = None
         entry = hist.get(pid) if isinstance(hist, dict) else None
@@ -411,9 +432,15 @@ def _warn_once(key: str, msg: str) -> None:
 
 def resolve_clip_source(req: dict[str, Any], base_dir: str) -> str:
     """Footage file for a clip's swap source: the swapped video in the job folder when it exists or
-    the backend can make it now, else the input video (with one warning). Never raises CliError."""
-    key = swap_key(req)
-    out = default_output(req, base_dir)
+    the backend can make it now, else the input video (with one warning). Never raises: whatever the
+    backend answers, the error goes to stderr and the input video plays (a missing input video is then
+    reported by the clip scene like any missing footage)."""
+    try:
+        key = swap_key(req)
+        out = default_output(req, base_dir)
+    except OSError as e:  # an input file is missing or unreadable, so there is nothing to swap
+        _warn_once(str(req.get("video")), f"swap source skipped ({e}); playing the input video")
+        return str(req["video"])
     if os.path.isfile(out):
         return out
     if not os.environ.get(ENV_URL):
@@ -427,7 +454,7 @@ def resolve_clip_source(req: dict[str, Any], base_dir: str) -> str:
                 run_swap(req["video"], req["character"], req["mode"], req["prompt"], req["target"], int(req["seed"]),
                          out=out)
         return out
-    except (CliError, OSError) as e:
+    except Exception as e:  # any backend failure falls back to the input video; never into the frame
         _warn_once(key, f"swap source failed ({getattr(e, 'code', type(e).__name__)}: {e}); playing the input video")
         return str(req["video"])
 

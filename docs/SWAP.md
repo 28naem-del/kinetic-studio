@@ -84,7 +84,7 @@ clip plays the input video and prints one warning, so a render never stops for t
 
 | exit | code | when |
 |---|---|---|
-| 7 | `BACKEND_UNREACHABLE` | `KSTUDIO_COMFY_URL` is unset (`reason: not_configured`) or the server cannot be reached (`reason: unreachable`) |
+| 7 | `BACKEND_UNREACHABLE` | `KSTUDIO_COMFY_URL` is unset (`reason: not_configured`) or the server cannot be reached (`reason: unreachable`) or the URL answers with something that is not ComfyUI's JSON API, such as a web page, a proxy or login screen, or the wrong port (`reason: not_comfyui`) |
 | 6 | `MISSING_NODES` | the server lacks node types the workflow uses: install Openjutsu's node packs and restart ComfyUI |
 | 4 | `WORKFLOW_REJECTED`, `SWAP_FAILED`, `NO_OUTPUT`, `SWAP_TIMEOUT` | the server refused or failed the job; the message carries ComfyUI's error |
 | 2 | `FILE_NOT_FOUND`, `USAGE` | an input file is missing or the arguments are wrong |
@@ -96,5 +96,6 @@ events go to stderr as JSON lines.
 
 The two workflows in `kstudio/workflows/` are Openjutsu's, unchanged, under the MIT licence (see
 `THIRD_PARTY_NOTICES.md`). The client is tested against an in-process mock of the ComfyUI HTTP API
-(submit, queue, history, download, rejection and the unreachable case); it has not been run here
-against a real GPU backend.
+(submit, queue, history, download, rejection, the unreachable case and a server that answers with a web
+page). It has not been run here against a real GPU backend: no NVIDIA machine with Openjutsu's node packs
+was available.

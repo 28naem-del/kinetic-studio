@@ -29,6 +29,7 @@ UPSTREAM_SHA256 = {
     "object": "fbfec05071d7f6d9986ba2650d58db9a0e5810a1e13f8efba36afbbf0f67eee2",
 }
 FAKE_MP4 = b"\x00\x00\x00\x18ftypmp42" + b"swapped-video" * 64
+LOGIN_PAGE = b"<!doctype html><html><head><title>Router login</title></head><body>Sign in</body></html>"
 
 
 # --------------------------------------------------------------------------- mock ComfyUI
@@ -39,6 +40,7 @@ class Backend:
         self.reject = False
         self.fail = False
         self.no_video = False
+        self.html: str | None = None  # path prefix answered with a web page instead of JSON ("/" = everything)
         self.pending = 2  # history polls before the job is done
         self.video = FAKE_MP4
         self.uploads: dict[str, bytes] = {}
@@ -67,7 +69,15 @@ def _handler(be: Backend):
             self.end_headers()
             self.wfile.write(data)
 
+        def _page(self):
+            if be.html is not None and self.path.startswith(be.html):
+                self._send(200, LOGIN_PAGE, "text/html")
+                return True
+            return False
+
         def do_GET(self):
+            if self._page():
+                return None
             u = urllib.parse.urlsplit(self.path)
             if u.path == "/object_info":
                 return self._send(200, {c: {"input": {}} for c in be.known()})
@@ -100,6 +110,8 @@ def _handler(be: Backend):
 
         def do_POST(self):
             body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            if self._page():
+                return None
             if self.path == "/upload/image":
                 assert self.headers["Content-Type"].startswith("multipart/form-data; boundary=")
                 head, _, rest = body.partition(b'name="image"; filename="')
@@ -266,6 +278,30 @@ def test_unconfigured_backend_is_json_exit_7(capsys, inputs, tmp_path):
     assert d["error"]["code"] == "BACKEND_UNREACHABLE" and d["error"]["reason"] == "not_configured"
 
 
+@pytest.mark.parametrize("where", ["/", "/prompt", "/upload", "/history"])
+def test_non_json_backend_is_json_exit_7(capsys, backend, inputs, tmp_path, where):
+    """A URL that answers HTTP but not ComfyUI's JSON (a router login page, a proxy, the wrong port)."""
+    backend.html = where
+    v, c = inputs
+    out = tmp_path / "x.mp4"
+    d, err = run(capsys, "--video", v, "--character", c, "-o", str(out), "--poll", "0.01", code=7)
+    e = d["error"]
+    assert e["code"] == "BACKEND_UNREACHABLE" and e["reason"] == "not_comfyui" and e["url"] == backend.url
+    assert "not a ComfyUI API" in e["message"] and "Router login" in e["message"]
+    assert "8188" in e["hint"] and "KSTUDIO_COMFY_URL" in e["hint"]
+    assert "JSONDecodeError" not in json.dumps(d) and "Traceback" not in err
+    assert not out.exists() and not [f for f in os.listdir(tmp_path) if f.endswith(".part")]
+
+
+def test_non_json_backend_through_mcp(backend, inputs, tmp_path):
+    from kstudio import mcp_server
+    backend.html = "/"
+    v, c = inputs
+    r = mcp_server.run_tool("swap", {"video": v, "character": c, "output": str(tmp_path / "m.mp4")})
+    assert r["ok"] is False and r["error"]["code"] == "BACKEND_UNREACHABLE"
+    assert r["error"]["reason"] == "not_comfyui"
+
+
 def test_rejected_workflow(capsys, backend, inputs, tmp_path):
     backend.reject = True
     v, c = inputs
@@ -352,6 +388,25 @@ def test_swap_source_validation_and_requests(tmp_path):
     assert [r["path"] for r in swap_requests(spec)] == ["/scenes/2"]
 
 
+def test_clip_source_never_raises(monkeypatch, tmp_path, capsys):
+    """Whatever the backend does, a clip's swap source resolves to a file and never to an exception."""
+    monkeypatch.setenv(swap.ENV_URL, "http://127.0.0.1:1")
+
+    def boom(*a, **k):
+        raise RuntimeError("something unexpected")
+
+    monkeypatch.setattr(swap, "run_swap", boom)
+    req = swap_source({"swap": {"video": "a.mp4", "character": "b.png"}}, str(tmp_path))
+    # an input file is missing: nothing to swap, the clip gets the input path (and reports missing footage)
+    assert swap.resolve_clip_source(req, str(tmp_path)) == str(tmp_path / "a.mp4")
+    assert "swap source skipped" in capsys.readouterr().err
+    (tmp_path / "a.mp4").write_bytes(b"v")
+    (tmp_path / "b.png").write_bytes(b"c")
+    assert swap.resolve_clip_source(req, str(tmp_path)) == str(tmp_path / "a.mp4")
+    err = capsys.readouterr().err
+    assert "RuntimeError: something unexpected" in err and "playing the input video" in err
+
+
 def _spec_dir(tmp_path, video):
     d = tmp_path / "project"
     d.mkdir()
@@ -399,3 +454,15 @@ def test_clip_swap_source_through_the_backend_and_spec_preflight(tmp_path, capsy
     r, g, b = _first_frame(d)
     assert r > g + 60 and r > b + 60, "the clip plays the swapped footage"
     assert len(backend.prompts) == 1  # the render reused the preflight's file
+
+
+@needs_ffmpeg
+def test_clip_swap_source_plays_the_input_when_the_backend_is_not_comfyui(tmp_path, capsys, backend):
+    backend.html = "/"
+    d = _spec_dir(tmp_path, _video(tmp_path / "green.mp4", "0x20c040"))
+    r, g, b = _first_frame(d)
+    assert g > r + 60 and g > b + 60 and g > 150, "a web page instead of ComfyUI: the clip plays the input video"
+    err = capsys.readouterr().err
+    assert "BACKEND_UNREACHABLE" in err and "playing the input video" in err
+    assert not os.listdir(os.path.join(d, "out", "swap")) or not [
+        f for f in os.listdir(os.path.join(d, "out", "swap")) if f.endswith(".mp4")]
