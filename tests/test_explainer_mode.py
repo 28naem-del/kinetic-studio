@@ -184,13 +184,86 @@ def test_spec_timings_are_in_beats():
 
 
 def test_cover_clears_its_plate_before_the_page_turn(film):
-    """The columns sink and the standfirst drops ahead of the wipe, so no figure stubs ride across the cut."""
+    """The columns sink and the standfirst drops ahead of the wipe, so no figure stubs ride across the cut
+    (the cover still under the wipe is counted; the revealed page and the wipe edge are not)."""
     def cobalt(img):
         a = img[..., :3].astype(int)
-        lo = a[a.shape[0] // 2:]
-        return int(((lo.max(axis=2) - lo.min(axis=2)) > 90).sum())
+        lo = (a[a.shape[0] // 2:].max(axis=2) - a[a.shape[0] // 2:].min(axis=2)) > 90
+        edge = np.nonzero(lo.mean(axis=0) > 0.9)[0]                     # the wipe's accent edge, if any
+        if edge.size:                                                   # count the cover still covered only
+            lo = lo[:, edge.max() + 2:]
+        return int(lo.sum())
 
     cut = film.scenes[1].start
     before = cobalt(_frame(film, 45, 0.25))
     at_cut = cobalt(_frame(film, int(cut * 30) - 1, 0.25))
     assert before > 2000 and at_cut < 0.02 * before, (before, at_cut)
+
+
+def test_wipe_reveals_in_reading_order(film):
+    """The wipe into the definition travels left to right, so the term is uncovered letter by letter
+    and no line of the cover headline is swapped for the term inside one frame's shutter."""
+    b = next(b for b in film.boundaries if b.kind == "wipe")
+    assert b.b.type == "definition"
+    assert b.direction == (1, 0)
+
+
+def _screen_x(monkeypatch, film, f, texts):
+    """Screen x of the left edge of each of `texts` where frame f sets it (draft compositor)."""
+    got: dict[str, float] = {}
+    orig = X._rise
+
+    def spy(ctx, text, x, baseline, font, color, u, *a, **k):
+        if text in texts:
+            got[text] = ctx.c.getTotalMatrix().mapXY(x, baseline).x()
+        return orig(ctx, text, x, baseline, font, color, u, *a, **k)
+
+    monkeypatch.setattr(X, "_rise", spy)
+    _frame(film, f)
+    monkeypatch.undo()
+    return got
+
+
+def test_push_holds_the_page_heads(film, monkeypatch):
+    """Inside the push both page heads hold still on screen (the push's 1080 px move would smear
+    them under its shutter); the incoming panel's edge wipes one into the other."""
+    b = _push(film)
+    out_head, in_head = b.a.p["heading"], b.b.p["heading"]
+    mid = int(np.ceil(b.t * 30))                                        # first frame after the cut
+    assert b.t0 < mid / 30 < b.t1
+    early = int(np.ceil(b.t0 * 30)) + 2
+    rest_in = _screen_x(monkeypatch, film, int(np.ceil(b.t1 * 30)) + 1, {in_head})[in_head]
+    rest_out = _screen_x(monkeypatch, film, int(b.t0 * 30) - 1, {out_head})[out_head]
+    got_mid = _screen_x(monkeypatch, film, mid, {in_head, out_head})
+    got_early = _screen_x(monkeypatch, film, early, {out_head})
+    assert got_mid[in_head] == pytest.approx(rest_in, abs=4.0)
+    assert got_mid[out_head] == pytest.approx(rest_out, abs=4.0)
+    assert got_early[out_head] == pytest.approx(rest_out, abs=4.0)
+
+
+def _largest_empty_run(img):
+    """Largest vertical run of rows without strong edges, as a fraction of the height."""
+    import cv2
+    g = cv2.GaussianBlur(img[..., :3].astype(np.float32).mean(axis=2), (0, 0), 1.0)
+    e = np.hypot(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1))
+    m = cv2.dilate((e > 40.0).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    best = cur = 0
+    for row in m.mean(axis=1) > 0.004:
+        cur = 0 if row else cur + 1
+        best = max(best, cur)
+    return best / m.shape[0]
+
+
+def test_ladder_slots_are_set_on_the_match_cut(film):
+    """The empty tracks and their ledger rules are under way on the cut frame, so the ladder build
+    never leaves more than 40 % of the frame without content."""
+    dia = film.scenes[2]
+    f0 = int(np.ceil(dia.start * 30 - 1e-6))
+    for f in (f0, f0 + 1, f0 + 6, f0 + 15):
+        assert _largest_empty_run(_frame(film, f, 0.25)) < 0.4, f
+
+
+def test_end_card_source_line_breaks_before_the_source():
+    spec = load_spec(os.path.join(EXAMPLES, "explainer"))
+    small = spec["scenes"][-1]["small"]
+    assert small.split("\n") == ["Typical desktop latencies.", "Source: Hennessy & Patterson, 6th ed."]

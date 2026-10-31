@@ -25,6 +25,12 @@ An editorial system on the layout grid (layout.grid / layout.TYPE), with no pixe
   split, zoom, squash) arrives composed. Its beat-0 structure (running head, heading, rules,
   tracks) is drawn settled, because the panel move is its entrance; later beats reveal as usual.
   The incoming panel therefore carries its subject from the first frame of the window.
+* Held page heads: inside a push the page heads (running head, heading, standfirst) of both
+  pages, and the whole outgoing diagram, are drawn still on screen (`held`): the push's
+  translation is taken back out, the camera is kept. The new page slides over a still page and
+  its edge wipes one heading into the other, so no type crosses the frame under the shutter.
+* Ladder tracks: each empty track carries a ledger rule on its top edge and is under way a
+  1/4 beat ahead of the match cut, so the cut frame already shows every slot of the ladder.
 
 Scene types and spec fields (all optional unless stated):
 
@@ -52,8 +58,10 @@ Every scene keeps the fields of the v0.1 scene of the same name.
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import re
+from collections.abc import Iterator
 
 import skia
 
@@ -90,6 +98,40 @@ def carried(ctx: Ctx, scene: Scene) -> bool:
         if b.b is scene and b.kind in CARRY_KINDS and b.dur > 0:
             return True
     return False
+
+
+@contextlib.contextmanager
+def held(ctx: Ctx, scene: Scene, sides: str = "ab") -> Iterator[None]:
+    """Inside a push that carries `scene` out ("a" in `sides`) or in ("b"), draw what follows still
+    on screen: the push's translation is taken back out of the canvas (the camera is kept).
+    The explainer's page turn holds the page head (running head, heading, standfirst) of both
+    pages and the whole outgoing page, so the incoming page slides over a page that lies still
+    and its leading edge wipes one head into the other. Type that holds still stays sharp under
+    the push's shutter, where a 1080 px move would smear it. Outside a push this is a no-op."""
+    film = getattr(ctx, "film", None)
+    bt = film.boundary_at(ctx.t) if film is not None and hasattr(film, "boundary_at") else None
+    if bt is None or bt[0].kind != "push":
+        yield
+        return
+    b = bt[0]
+    if not (("a" in sides and scene is b.a) or ("b" in sides and scene is b.b)):
+        yield
+        return
+    c = ctx.c
+    m = c.getTotalMatrix()
+    cam = ctx.cam.matrix(1.0) if ctx.cam is not None else skia.Matrix()
+    inv_cam, inv_m = skia.Matrix(), skia.Matrix()
+    if not (cam.invert(inv_cam) and m.invert(inv_m)):
+        yield
+        return
+    outer = skia.Matrix.Concat(m, inv_cam)              # what the transition put around the scene
+    back = skia.Matrix.Translate(-outer.getTranslateX(), -outer.getTranslateY())
+    c.save()
+    c.concat(skia.Matrix.Concat(inv_m, skia.Matrix.Concat(back, m)))
+    try:
+        yield
+    finally:
+        c.restore()
 
 
 def _bu0(ctx: Ctx, settled: bool, at: float, dur: float = 0.5) -> float:
@@ -188,6 +230,7 @@ def _two_tone(ctx: Ctx, text: str, x: float, baseline: float, f: skia.Font, base
 
 
 PRE = 1 / 8                # cover pre-roll (beats): its entrance is under way on frame 0
+TRACK_PRE = 1 / 4          # ladder tracks: pre-roll (beats), so the match-cut frame shows the slots
 PAD_T, PAD_B = 0.2, 0.18   # highlighter above the cap top / below the baseline (em)
 
 
@@ -442,7 +485,8 @@ class Diagram(Scene):
     whole beats; a tick on every entry. The heading sits in the running-head band and the
     figure fills the anchor -> bottom safe line. The first node takes over a published "term"
     (match cut). Layouts: ladder (bars, default for portrait explainer specs), chain, radial,
-    manual."""
+    manual. Pushed out, the whole page holds still under the incoming one; pushed in, its head
+    holds while the figure slides under it."""
     defaults = {"index": "", "kicker": "", "heading": "", "nodes": [], "edges": None, "layout": "chain",
                 "callouts": [], "stagger": "1/2b", "first": 0.0, "node_r": 0, "caption": "", "page": "",
                 "trace": None}
@@ -538,6 +582,16 @@ class Diagram(Scene):
     def draw(self, ctx: Ctx) -> None:
         g = L.grid(ctx)
         settled = carried(ctx, self)
+        with held(ctx, self, "a"):             # pushed out: the page lies still under the next one
+            with held(ctx, self, "b"):         # pushed in: the head holds, the body slides under it
+                self._head(ctx, g, settled)
+            if self.p["layout"] == "ladder":
+                self._draw_ladder(ctx, g, settled)
+            else:
+                self._draw_circles(ctx, g)
+
+    def _head(self, ctx: Ctx, g: L.Grid, settled: bool) -> None:
+        """Running head, heading and standfirst in the running-head band."""
         fb = folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p), settled)
         ink_k = ctx.pal.on(self.ground)
         if self.p["heading"]:
@@ -555,10 +609,6 @@ class Diagram(Scene):
                 for ln in D.set_lines(cf, cl, g.x0, hb.baseline + g.bl(4), cr.leading, cr.tk(ctx)).lines:
                     _rise(ctx, ln.text, ln.x, ln.baseline, cf, ctx.pal("muted"), _bu0(ctx, settled, 1 / 4, 0.75),
                           cr.tk(ctx))
-        if self.p["layout"] == "ladder":
-            self._draw_ladder(ctx, g, settled)
-        else:
-            self._draw_circles(ctx, g)
 
     def _edge_u(self, ctx: Ctx, ap: list[float], ia: int, ib: int) -> float:
         """Edge into node ib draws over the off-beat half of the step before ib lands."""
@@ -617,13 +667,18 @@ class Diagram(Scene):
                     _two_tone(ctx, lab, lx, cy + xh / 2, lf, edge_c, ctx.pal(_on(ctx, "accent2")), hl, T["meta"].tk(ctx))
                 else:
                     _rise(ctx, lab, lx, cy + xh / 2, lf, edge_c, u, T["meta"].tk(ctx))
-        # scene plane: the empty tracks (beat 0, a 16th apart), then the bars
+        # scene plane: the empty tracks, each with a ledger rule on its top edge (the list's rule
+        # language), then the bars. The tracks are under way on the cut (a 1/4 beat pre-roll, a
+        # 16th apart), so the frame the match cut lands on already shows the whole ladder's slots.
         n = len(nodes)
+        ink_k = ctx.pal.on(self.ground)
         for i, rt in enumerate(rects):
-            ut = SETTLE(_bu0(ctx, settled, i / 16, 0.75))
+            ut = SETTLE(_bu0(ctx, settled, i / 16 - TRACK_PRE, 0.75))
             if ut > 0:
+                x1 = rt.left() + (min(rt.right(), g.x1) - rt.left()) * ut
                 c.drawRect(skia.Rect(rt.left(), rt.top(), rt.left() + rt.width() * ut, rt.bottom()),
-                           D.paint(ctx.pal(ctx.pal.on(self.ground), 0.06)))
+                           D.paint(ctx.pal(ink_k, 0.06)))
+                c.drawRect(skia.Rect(rt.left(), rt.top(), x1, rt.top() + g.bl(0.5)), D.paint(ctx.pal(ink_k, 0.3)))
         for i, nd in enumerate(nodes):
             target = rects[i]
             fill = self._fill(i, nd)
@@ -800,7 +855,8 @@ class Bullets(Scene):
     {text, detail, icon}; numbered false sets check marks.
     The heading's cap top is on the anchor with the standfirst under it; the rows share the rest
     down to the bottom safe line. Item lines are subhead 71, details body 53.
-    Carried in by a push, the heading, rules and ghost numerals arrive already set."""
+    Carried in by a push, the heading, rules and ghost numerals arrive already set, and the
+    page head holds still on screen while the panel slides in under it."""
     defaults = {"index": "", "kicker": "", "heading": "", "caption": "", "items": [], "stagger": "1b",
                 "first": "1b", "numbered": True, "page": ""}
 
@@ -814,28 +870,29 @@ class Bullets(Scene):
         c = ctx.c
         g = L.grid(ctx)
         settled = carried(ctx, self)
-        folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p), settled)
         ink_k = ctx.pal.on(self.ground)
         top = g.anchor_y
-        if self.p["heading"]:
-            # heading cap top on the anchor, standfirst under it; the list owns the rest down to
-            # the bottom safe line (one item line + a two-line detail per row)
-            hr = T["title"]
-            hf = L.fit_role(ctx, hr, self.p["heading"], g.content_w, weight=650, face="display")
-            hl = D.wrap(hf, self.p["heading"], g.content_w, hr.tk(ctx, "display"), style="balance")[:1]
-            hb = D.set_lines(hf, hl, g.x0, top, hr.leading, hr.tk(ctx, "display"))
-            for i, ln in enumerate(hb.lines):
-                _rise(ctx, ln.text, ln.x, ln.baseline, hf, ctx.pal(ink_k), _bu0(ctx, settled, i / 16, 0.75),
-                      hr.tk(ctx, "display"))
-            top = max(top, hb.baseline + g.bl(8))
-            if self.p["caption"]:
-                cf = SMALL.font(ctx, weight=400)
-                cl = D.wrap(cf, self.p["caption"], g.content_w, SMALL.tk(ctx))[:1]
-                cb = D.set_lines(cf, cl, g.x0, hb.baseline + g.bl(4), SMALL.leading, SMALL.tk(ctx))
-                for ln in cb.lines:
-                    _rise(ctx, ln.text, ln.x, ln.baseline, cf, ctx.pal("muted"), _bu0(ctx, settled, 1 / 8, 0.75),
-                          SMALL.tk(ctx))
-                top = max(top, cb.baseline + g.bl(6))
+        with held(ctx, self):  # the page head holds still while the push turns the page
+            folio(ctx, g, self.p["index"], self.p["kicker"], _count(self.p), settled)
+            if self.p["heading"]:
+                # heading cap top on the anchor, standfirst under it; the list owns the rest down to
+                # the bottom safe line (one item line + a two-line detail per row)
+                hr = T["title"]
+                hf = L.fit_role(ctx, hr, self.p["heading"], g.content_w, weight=650, face="display")
+                hl = D.wrap(hf, self.p["heading"], g.content_w, hr.tk(ctx, "display"), style="balance")[:1]
+                hb = D.set_lines(hf, hl, g.x0, top, hr.leading, hr.tk(ctx, "display"))
+                for i, ln in enumerate(hb.lines):
+                    _rise(ctx, ln.text, ln.x, ln.baseline, hf, ctx.pal(ink_k), _bu0(ctx, settled, i / 16, 0.75),
+                          hr.tk(ctx, "display"))
+                top = max(top, hb.baseline + g.bl(8))
+                if self.p["caption"]:
+                    cf = SMALL.font(ctx, weight=400)
+                    cl = D.wrap(cf, self.p["caption"], g.content_w, SMALL.tk(ctx))[:1]
+                    cb = D.set_lines(cf, cl, g.x0, hb.baseline + g.bl(4), SMALL.leading, SMALL.tk(ctx))
+                    for ln in cb.lines:
+                        _rise(ctx, ln.text, ln.x, ln.baseline, cf, ctx.pal("muted"), _bu0(ctx, settled, 1 / 8, 0.75),
+                              SMALL.tk(ctx))
+                    top = max(top, cb.baseline + g.bl(6))
         items = self.p["items"]
         n = len(items)
         if not n:
