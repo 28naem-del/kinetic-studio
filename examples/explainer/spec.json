@@ -4,7 +4,11 @@
 // The cover's lower half is a figure plate (CPU, L1-L3, RAM) standing on the standfirst rule;
 // the cache columns fill with the highlighter on beat 1. The bullets page is pushed in from the
 // right (a page turn, 03 / 04 -> 04 / 04) already composed: heading, standfirst, rules, numerals.
-// The end card steps its elements in 32nds so it is full inside one beat.
+// The definition is turned to by a wipe with a cobalt leading edge; its body lands on the half beat.
+// The diagram traces a miss from L1 to RAM on beat 3 (each connector lit a 16th apart) and the
+// RAM callout lands on beat 4. Pages 03 and 04 share the head band; list items are 71 over 53.
+// The end card runs a reversed 8th cascade, so its body and CTA are already set at the hard cut
+// and the lockup lands last.
 {
   "mode": "explainer",
   "handle": "@kineticstudio",
@@ -26,7 +30,7 @@
       "term": "Cache", "phonetic": "/kash/", "pos": "noun · hardware",
       "definition": "A small, very fast memory next to the CPU that keeps copies of recently used data.",
       "stats": [ { "label": "Hit · L1", "value": "1 ns" }, { "label": "Miss · RAM", "value": "80 ns" } ],
-      "transition": { "kind": "wipe", "shape": "rect", "dir": "down", "dur": "1b", "edge": false, "soft": 0 },
+      "transition": { "kind": "wipe", "shape": "rect", "dir": "down", "dur": "1b", "edge": "accent", "edge_w": 8, "soft": 0 },
       "dur": "4b" },
     { "type": "diagram", "id": "hierarchy", "index": "03", "kicker": "Memory hierarchy", "page": "03 / 04",
       "heading": "Closer is faster", "caption": "Each level is bigger and slower.", "layout": "ladder",
@@ -41,22 +45,22 @@
         { "from": "L2", "to": "L3", "style": "arrow", "label": "miss" },
         { "from": "L3", "to": "RAM", "style": "arrow", "label": "miss" }
       ],
-      "callouts": [ { "node": "L1", "text": "fastest" }, { "node": "RAM", "text": "80× slower than L1" } ],
-      "first": "0b", "stagger": "1/2b", "camera": { "truck": 40 },
+      "callouts": [ { "node": "L1", "text": "fastest", "at": "2b" }, { "node": "RAM", "text": "80× slower than L1", "at": "4b" } ],
+      "first": "0b", "stagger": "1/2b", "trace": "3b", "camera": { "truck": 40 },
       "transition": { "kind": "match", "element": "term" }, "dur": "5b" },
     { "type": "bullets", "id": "why", "index": "04", "kicker": "Why it works", "page": "04 / 04",
       "heading": "Locality", "caption": "Why most reads never reach RAM.",
       "items": [
-        { "text": "Recently used data stays close", "detail": "Temporal locality: loops reuse the same values." },
-        { "text": "Neighbours arrive together", "detail": "Spatial locality: each miss fetches a 64-byte line." },
+        { "text": "Recent data stays close", "detail": "Temporal locality: loops reuse the same values." },
+        { "text": "Neighbours come along", "detail": "Spatial locality: each miss fetches a 64-byte line." },
         { "text": "Walk memory in order", "detail": "Sequential access turns most misses into hits." }
       ],
       "first": "1b", "stagger": "1b",
       "transition": { "kind": "push", "dir": "left", "dur": "1/2b" }, "dur": "4b" },
     { "type": "end_card", "id": "outro", "icon": "book", "brand": "Kinetic Studio", "title": "Keep data close.",
       "body": "Fast code is cache-friendly code.", "cta": "Follow for more",
-      "small": "Latencies approximate, typical desktop CPU. Source: Hennessy & Patterson, Computer Architecture, 6th ed.",
-      "handle": "@kineticstudio", "step": "1/8b",
+      "small": "Typical desktop latencies. Source: Hennessy & Patterson, 6th ed.",
+      "handle": "@kineticstudio", "step": "-1/8b",
       "transition": { "kind": "cut", "on": "downbeat" }, "dur": "4b" }
   ]
 }

@@ -1,5 +1,5 @@
-"""Explainer mode, round 2: the page-turn push, reel-sized captions, the end card inside a beat,
-the cover figure plate and beat-only timings in the example spec."""
+"""Explainer mode: the page-turn push, reel-sized captions, the end card inside a beat, the cover
+figure plate, the poster frame, the list hierarchy, the traced miss and beat-only timings."""
 import json
 import os
 import re
@@ -16,7 +16,7 @@ from kstudio.scenes import explainer as X
 from kstudio.spec import load_spec
 
 W, H = 1080, 1920
-TIMING_KEYS = {"dur", "at", "first", "stagger", "step", "delay", "offset", "hold", "start", "end"}
+TIMING_KEYS = {"dur", "at", "first", "stagger", "step", "delay", "offset", "hold", "start", "end", "trace"}
 
 
 @pytest.fixture(scope="module")
@@ -82,20 +82,59 @@ def test_explainer_text_is_reel_sized(film, monkeypatch):
     assert X.SMALL.px(L.grid(W, H)) >= 53.0
 
 
+def _ink(img):
+    g = img[..., :3].astype(float).mean(axis=2)
+    bg = np.median(g)
+    rows = (np.abs(g - bg) > 40)[int(0.1 * g.shape[0]):int(0.95 * g.shape[0])]
+    return int(rows.sum())
+
+
 def test_end_card_is_full_inside_one_beat(film):
     ec = film.scenes[-1]
     spb = film.tl.spb
     f1 = int(np.ceil((ec.start + spb) * 30))
     fe = int((ec.start + ec.dur) * 30) - 2
-
-    def ink(img):
-        g = img[..., :3].astype(float).mean(axis=2)
-        bg = np.median(g)
-        rows = (np.abs(g - bg) > 40)[int(0.1 * g.shape[0]):int(0.95 * g.shape[0])]
-        return int(rows.sum())
-
-    a, z = ink(_frame(film, f1, 0.25)), ink(_frame(film, fe, 0.25))
+    a, z = _ink(_frame(film, f1, 0.25)), _ink(_frame(film, fe, 0.25))
     assert z > 0 and a / z >= 0.85, (a, z)
+
+
+def test_end_card_is_already_set_at_the_hard_cut(film):
+    """The reversed cascade: the frame on the cut already carries most of the card."""
+    ec = film.scenes[-1]
+    f0 = int(np.ceil(ec.start * 30 - 1e-6))
+    fe = int((ec.start + ec.dur) * 30) - 2
+    a, z = _ink(_frame(film, f0, 0.25)), _ink(_frame(film, fe, 0.25))
+    assert z > 0 and a / z >= 0.5, (a, z)
+
+
+def test_poster_frame_carries_the_title(film, monkeypatch):
+    """Frame 0 is the thumbnail: the cover headline and folio are already rising, not blank."""
+    seen = _spy_rise(monkeypatch)
+    img = _frame(film, 0, 0.25)
+    first = film.scenes[0].p["title"].split("\n")[0]
+    lines = [u for t, _, u in seen if t == first]
+    assert lines and max(lines) > 0.2, seen
+    assert _ink(img) > 0
+
+
+def test_list_items_outrank_their_details(film, monkeypatch):
+    """Item lines are subhead 71 and details body 53, so the list reads at two levels."""
+    seen = _spy_rise(monkeypatch)
+    _frame(film, int(film.scenes[3].start * 30) + 80)
+    sizes = {t: px for t, px, _ in seen}
+    g = L.grid(W, H)
+    for it in film.scenes[3].p["items"]:
+        assert sizes.get(it["text"]) == pytest.approx(X.T["subhead"].px(g), abs=0.6), (it, sizes)
+    dets = [px for t, px, _ in seen if any(t and t in it["detail"] for it in film.scenes[3].p["items"])]
+    assert dets and max(dets) == pytest.approx(53.0, abs=0.6)
+
+
+def test_traced_miss_ticks_on_the_beat(film):
+    dia = film.scenes[2]
+    assert dia.type == "diagram" and dia.p["trace"] is not None
+    t = float(dia.p["trace"])
+    assert film.tl.beats_of(t, dia.start) == pytest.approx(round(film.tl.beats_of(t, dia.start)), abs=1e-6)
+    assert any(abs(c.at - t) < 1e-6 for c in dia.cues())
 
 
 def test_cover_plate_uses_the_lower_half(film, monkeypatch):
@@ -141,4 +180,4 @@ def test_spec_timings_are_in_beats():
         elif isinstance(v, str) and re.fullmatch(r"[\d.]+\s*(s|ms)?", v.strip()) and float(re.sub(r"[^\d.]", "", v)):
             bad.append((path, v))
     assert not bad, bad
-    assert spec["scenes"][-1]["step"] == "1/8b"
+    assert spec["scenes"][-1]["step"] == "-1/8b"                          # reversed cascade
