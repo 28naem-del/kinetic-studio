@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import hashlib
+import http.client
 import json
 import os
 import sys
@@ -35,6 +36,9 @@ from .spec import SWAP_MODES, load_spec, swap_dir, swap_key, swap_requests
 ENV_URL = "KSTUDIO_COMFY_URL"
 WORKFLOW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workflows")
 UPSTREAM = "https://github.com/D3voz/openjutsu"
+GATEWAY_CODES = (502, 503, 504)
+NOT_COMFYUI_HINT = (f"check the host and port in {ENV_URL}: it must point at ComfyUI itself "
+                    f"(port 8188 by default), not a web page or proxy; see docs/SWAP.md")
 SETUP_HINT = (f"set {ENV_URL} to a ComfyUI server (http://host:8188) with Openjutsu's node packs and models "
               f"installed; see docs/SWAP.md and {UPSTREAM}")
 VIDEO_EXT = (".mp4", ".webm", ".mov", ".mkv", ".gif")
@@ -151,18 +155,32 @@ class Comfy:
         self.url = url
         self.timeout = timeout
 
+    def unreachable(self, why: Any) -> BackendUnreachable:
+        return BackendUnreachable(f"swap backend unreachable at {self.url}: {why}", reason="unreachable",
+                                  url=self.url, hint=SETUP_HINT)
+
+    def not_comfyui(self, path: str, what: str) -> BackendUnreachable:
+        return BackendUnreachable(f"{self.url} answered {path} with {what}; it is not a ComfyUI API",
+                                  reason="not_comfyui", url=self.url, hint=NOT_COMFYUI_HINT)
+
     def _open(self, path: str, data: bytes | None = None, headers: dict[str, str] | None = None,
               timeout: float | None = None) -> Any:
         req = urllib.request.Request(self.url + path, data=data, headers=headers or {},
                                      method="POST" if data is not None else "GET")
         try:
             return urllib.request.urlopen(req, timeout=timeout or self.timeout)  # noqa: S310 - http(s) only
-        except urllib.error.HTTPError:
+        except urllib.error.HTTPError as e:
+            if e.code in GATEWAY_CODES:  # a proxy in front of a ComfyUI that is down or restarting
+                e.close()
+                raise self.unreachable(f"HTTP {e.code} from a proxy or gateway (is ComfyUI running behind it?)") from None
             raise
         except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as e:
-            reason = getattr(e, "reason", e)
-            raise BackendUnreachable(f"swap backend unreachable at {self.url}: {reason}", reason="unreachable",
-                                     url=self.url, hint=SETUP_HINT) from None
+            raise self.unreachable(getattr(e, "reason", e)) from None
+        except http.client.BadStatusLine as e:  # the port speaks something else (ssh, TLS, a raw service)
+            line = str(e).strip()[:40]
+            raise self.not_comfyui(path, f"a reply that is not HTTP ({line!r})") from None
+        except http.client.HTTPException as e:  # a broken reply (header line too long, cut off)
+            raise self.unreachable(f"broken HTTP reply ({type(e).__name__})") from None
 
     def _decode(self, path: str, raw: bytes, empty: bytes = b"null") -> Any:
         """JSON body of a reply; anything else means the URL is not a ComfyUI API (a web page, a proxy
@@ -171,17 +189,15 @@ class Comfy:
             return json.loads(raw or empty)
         except ValueError:
             head = raw[:60].decode("utf-8", "replace").strip().replace("\n", " ")
-            raise BackendUnreachable(f"{self.url} answered {path} with something other than JSON ({head!r}); "
-                                     f"it is not a ComfyUI API", reason="not_comfyui", url=self.url,
-                                     hint=f"check the host and port in {ENV_URL}: it must point at ComfyUI itself "
-                                          f"(port 8188 by default), not a web page or proxy; see docs/SWAP.md") from None
+            raise self.not_comfyui(path, f"something other than JSON ({head!r})") from None
 
-    def _read(self, r: Any) -> bytes:
+    def _read(self, r: Any, size: int | None = None) -> bytes:
         try:
-            return bytes(r.read())
+            return bytes(r.read() if size is None else r.read(size))
         except (ConnectionError, TimeoutError, OSError) as e:
-            raise BackendUnreachable(f"swap backend unreachable at {self.url}: {e}", reason="unreachable",
-                                     url=self.url, hint=SETUP_HINT) from None
+            raise self.unreachable(e) from None
+        except http.client.HTTPException as e:  # IncompleteRead: the connection dropped mid-reply
+            raise self.unreachable(f"the reply broke off ({type(e).__name__})") from None
 
     def get_json(self, path: str) -> Any:
         with self._open(path) as r:
@@ -235,14 +251,15 @@ class Comfy:
                                node_errors=r["node_errors"], hint=_node_hint(json.dumps(r["node_errors"])))
         return str(r["prompt_id"])
 
-    def missing_nodes(self, classes: list[str]) -> list[str] | None:
-        """Node classes the server does not know (None when it cannot tell)."""
+    def missing_nodes(self, classes: list[str]) -> list[str]:
+        """Node classes the server does not know. ComfyUI always serves /object_info as a JSON object,
+        so any other reply there means the URL is not ComfyUI (a web server on the wrong port, a login)."""
         try:
             info = self.get_json("/object_info")
-        except urllib.error.HTTPError:
-            return None
+        except urllib.error.HTTPError as e:
+            raise self.not_comfyui("/object_info", f"HTTP {e.code}") from None
         if not isinstance(info, dict):
-            return None
+            raise self.not_comfyui("/object_info", f"JSON that is not a node list ({type(info).__name__})")
         return [c for c in classes if c not in info]
 
     def download(self, item: dict[str, Any], dest: str) -> int:
@@ -253,11 +270,14 @@ class Comfy:
         try:
             with self._open(f"/view?{q}", timeout=max(self.timeout, 300.0)) as r, open(tmp, "wb") as out:
                 while True:
-                    block = r.read(1 << 20)
+                    block = self._read(r, 1 << 20)
                     if not block:
                         break
                     out.write(block)
                     n += len(block)
+                left = getattr(r, "length", None)  # bytes the server announced but never sent
+                if isinstance(left, int) and left > 0:
+                    raise self.unreachable(f"the download broke off with {left} bytes missing")
             if n == 0:
                 raise RenderFailed("the swap backend returned an empty video", code="NO_OUTPUT")
             os.replace(tmp, dest)
@@ -365,10 +385,14 @@ def run_swap(video: str, character: str, mode: str = "simple", prompt: str = "",
         try:
             hist = api.get_json(f"/history/{urllib.parse.quote(pid)}")
             hiccups = 0
-        except BackendUnreachable as e:
-            hiccups += 1  # a busy GPU box can drop a poll; give up after a few in a row
-            if hiccups >= 5 or e.details.get("reason") == "not_comfyui":
+        except (BackendUnreachable, urllib.error.HTTPError) as e:
+            hiccups += 1  # a busy GPU box or its proxy can drop a poll; give up after a few in a row
+            if isinstance(e, BackendUnreachable) and e.details.get("reason") == "not_comfyui":
                 raise
+            if hiccups >= 5:
+                if isinstance(e, BackendUnreachable):
+                    raise
+                raise api.unreachable(f"/history answered HTTP {e.code} {hiccups} times in a row") from None
             hist = None
         entry = hist.get(pid) if isinstance(hist, dict) else None
         if isinstance(entry, dict):

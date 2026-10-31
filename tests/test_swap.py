@@ -41,6 +41,10 @@ class Backend:
         self.fail = False
         self.no_video = False
         self.html: str | None = None  # path prefix answered with a web page instead of JSON ("/" = everything)
+        self.status: tuple[int, str] | None = None  # (HTTP code, path prefix) answered with an HTML error page
+        self.status_left = -1  # how many replies get the error page (-1 = all)
+        self.object_info: object = None  # replaces the /object_info body when set
+        self.cut: dict[str, int] = {}  # path prefix -> how many replies there are cut off mid-body
         self.pending = 2  # history polls before the job is done
         self.video = FAKE_MP4
         self.uploads: dict[str, bytes] = {}
@@ -73,13 +77,34 @@ def _handler(be: Backend):
             if be.html is not None and self.path.startswith(be.html):
                 self._send(200, LOGIN_PAGE, "text/html")
                 return True
+            if be.status is not None and self.path.startswith(be.status[1]) and be.status_left != 0:
+                with be.lock:
+                    be.status_left -= be.status_left > 0
+                self._send(be.status[0], f"<html><body>{be.status[0]} error</body></html>".encode(), "text/html")
+                return True
             return False
+
+        def _cut(self, data):
+            """Announce the whole body, send a few bytes and close: the client sees a truncated reply."""
+            prefix = next((p for p, n in be.cut.items() if n > 0 and self.path.startswith(p)), None)
+            if prefix is None:
+                return False
+            with be.lock:
+                be.cut[prefix] -= 1
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data) + 400))
+            self.end_headers()
+            self.wfile.write(data[:5])
+            return True
 
         def do_GET(self):
             if self._page():
                 return None
             u = urllib.parse.urlsplit(self.path)
             if u.path == "/object_info":
+                if be.object_info is not None:
+                    return self._send(200, be.object_info)
                 return self._send(200, {c: {"input": {}} for c in be.known()})
             if u.path == "/queue":
                 with be.lock:
@@ -87,6 +112,8 @@ def _handler(be: Backend):
                 return self._send(200, {"queue_running": [], "queue_pending": [[1, "p-1", {}, {}, []]] if waiting else []})
             if u.path.startswith("/history/"):
                 pid = u.path.rsplit("/", 1)[1]
+                if self._cut(b'{"' + pid.encode() + b'": {}}'):
+                    return None
                 with be.lock:
                     be.polls += 1
                     done = be.polls > be.pending
@@ -105,6 +132,8 @@ def _handler(be: Backend):
                                               "outputs": outputs}})
             if u.path == "/view":
                 be.views.append(dict(urllib.parse.parse_qsl(u.query)))
+                if self._cut(be.video):
+                    return None
                 return self._send(200, be.video, "video/mp4")
             return self._send(404, {"error": "not found"})
 
@@ -169,6 +198,47 @@ def _dead_url():
     port = s.getsockname()[1]
     s.close()
     return f"http://127.0.0.1:{port}"
+
+
+class RawPort:
+    """A TCP port that answers every connection with bytes that are not HTTP (an ssh banner, a TLS alert)."""
+
+    def __init__(self, payload: bytes):
+        self.sock = socket.socket()
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(8)
+        self.url = f"http://127.0.0.1:{self.sock.getsockname()[1]}"
+        self.payload = payload
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        while True:
+            try:
+                c, _ = self.sock.accept()
+            except OSError:
+                return
+            with c:
+                c.settimeout(1.0)
+                try:
+                    c.recv(65536)
+                    c.sendall(self.payload)
+                except OSError:
+                    pass
+
+    def close(self):
+        self.sock.close()
+
+
+NOT_HTTP = {"ssh": b"SSH-2.0-OpenSSH_9.6\r\n", "tls": b"\x15\x03\x01\x00\x02\x02\x46"}
+
+
+@pytest.fixture
+def raw_port(request, monkeypatch):
+    port = RawPort(NOT_HTTP[request.param])
+    monkeypatch.setenv(swap.ENV_URL, port.url)
+    yield port
+    port.close()
 
 
 def run(capsys, *argv, code=0):
@@ -291,6 +361,95 @@ def test_non_json_backend_is_json_exit_7(capsys, backend, inputs, tmp_path, wher
     assert "8188" in e["hint"] and "KSTUDIO_COMFY_URL" in e["hint"]
     assert "JSONDecodeError" not in json.dumps(d) and "Traceback" not in err
     assert not out.exists() and not [f for f in os.listdir(tmp_path) if f.endswith(".part")]
+
+
+def _no_leak(d, err, out, tmp_path):
+    text = json.dumps(d)
+    for name in ("INTERNAL_ERROR", "BadStatusLine:", "IncompleteRead(", "HTTPError", "Traceback"):
+        assert name not in text and name not in err, name
+    assert not out.exists() and not [f for f in os.listdir(tmp_path) if f.endswith(".part")]
+
+
+@pytest.mark.parametrize("code", [404, 401, 500])
+def test_wrong_port_web_server_error_page_is_exit_7(capsys, backend, inputs, tmp_path, code):
+    """Another web server on the port answers every path with an HTML error page."""
+    backend.status = (code, "/")
+    v, c = inputs
+    out = tmp_path / "x.mp4"
+    d, err = run(capsys, "--video", v, "--character", c, "-o", str(out), code=7)
+    e = d["error"]
+    assert e["code"] == "BACKEND_UNREACHABLE" and e["reason"] == "not_comfyui" and e["url"] == backend.url
+    assert f"/object_info with HTTP {code}" in e["message"] and "not a ComfyUI API" in e["message"]
+    assert "8188" in e["hint"] and not backend.uploads
+    _no_leak(d, err, out, tmp_path)
+
+
+@pytest.mark.parametrize("code", [502, 503, 504])
+@pytest.mark.parametrize("where", ["/", "/upload", "/prompt", "/view"])
+def test_proxy_gateway_error_is_exit_7_unreachable(capsys, backend, inputs, tmp_path, code, where):
+    """A reverse proxy whose ComfyUI is down answers 502/503/504: the backend is unreachable, not refusing."""
+    backend.status = (code, where)
+    v, c = inputs
+    out = tmp_path / "x.mp4"
+    d, err = run(capsys, "--video", v, "--character", c, "-o", str(out), "--poll", "0.01", code=7)
+    e = d["error"]
+    assert e["code"] == "BACKEND_UNREACHABLE" and e["reason"] == "unreachable"
+    assert f"HTTP {code}" in e["message"] and "KSTUDIO_COMFY_URL" in e["hint"]
+    _no_leak(d, err, out, tmp_path)
+
+
+def test_json_that_is_not_a_node_list_is_not_comfyui(capsys, backend, inputs, tmp_path):
+    backend.object_info = []
+    v, c = inputs
+    out = tmp_path / "x.mp4"
+    d, err = run(capsys, "--video", v, "--character", c, "-o", str(out), code=7)
+    assert d["error"]["reason"] == "not_comfyui" and "not a node list" in d["error"]["message"]
+    _no_leak(d, err, out, tmp_path)
+
+
+@pytest.mark.parametrize("raw_port", ["ssh", "tls"], indirect=True)
+def test_non_http_port_is_exit_7_not_comfyui(capsys, raw_port, inputs, tmp_path):
+    """The URL points at a port that does not speak HTTP at all (sshd, a TLS-only service)."""
+    v, c = inputs
+    out = tmp_path / "x.mp4"
+    d, err = run(capsys, "--video", v, "--character", c, "-o", str(out), code=7)
+    e = d["error"]
+    assert e["code"] == "BACKEND_UNREACHABLE" and e["reason"] == "not_comfyui" and e["url"] == raw_port.url
+    assert "not HTTP" in e["message"] and "8188" in e["hint"]
+    _no_leak(d, err, out, tmp_path)
+
+
+@pytest.mark.parametrize("drop", ["truncated", "502", "500"])
+def test_dropped_history_polls_are_hiccups(capsys, backend, inputs, tmp_path, drop):
+    """A truncated /history reply or a proxy error mid-job must not abort a long GPU run."""
+    if drop == "truncated":
+        backend.cut["/history"] = 2
+    else:
+        backend.status, backend.status_left = (int(drop), "/history"), 2
+    v, c = inputs
+    out = tmp_path / "x.mp4"
+    res, _ = run(capsys, "--video", v, "--character", c, "-o", str(out), "--poll", "0.01")
+    assert out.read_bytes() == FAKE_MP4 and res["bytes"] == len(FAKE_MP4)
+    assert backend.cut.get("/history", 0) == 0 and backend.status_left in (-1, 0)
+
+
+def test_history_that_keeps_breaking_off_gives_up_with_exit_7(capsys, backend, inputs, tmp_path):
+    backend.cut["/history"] = 50
+    v, c = inputs
+    out = tmp_path / "x.mp4"
+    d, err = run(capsys, "--video", v, "--character", c, "-o", str(out), "--poll", "0.01", code=7)
+    assert d["error"]["reason"] == "unreachable" and "broke off" in d["error"]["message"]
+    assert backend.cut["/history"] == 45  # five polls in a row, then it stops
+    _no_leak(d, err, out, tmp_path)
+
+
+def test_truncated_download_leaves_no_output(capsys, backend, inputs, tmp_path):
+    backend.cut["/view"] = 1
+    v, c = inputs
+    out = tmp_path / "x.mp4"
+    d, err = run(capsys, "--video", v, "--character", c, "-o", str(out), "--poll", "0.01", code=7)
+    assert d["error"]["reason"] == "unreachable" and "bytes missing" in d["error"]["message"]
+    _no_leak(d, err, out, tmp_path)
 
 
 def test_non_json_backend_through_mcp(backend, inputs, tmp_path):
@@ -466,3 +625,26 @@ def test_clip_swap_source_plays_the_input_when_the_backend_is_not_comfyui(tmp_pa
     assert "BACKEND_UNREACHABLE" in err and "playing the input video" in err
     assert not os.listdir(os.path.join(d, "out", "swap")) or not [
         f for f in os.listdir(os.path.join(d, "out", "swap")) if f.endswith(".mp4")]
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("bad", ["html404", "gateway502", "ssh"])
+def test_clip_swap_source_plays_the_input_for_wrong_port_replies(tmp_path, capsys, backend, monkeypatch, bad):
+    port = None
+    if bad == "html404":
+        backend.status = (404, "/")
+    elif bad == "gateway502":
+        backend.status = (502, "/")
+    else:
+        port = RawPort(NOT_HTTP["ssh"])
+        monkeypatch.setenv(swap.ENV_URL, port.url)
+    try:
+        d = _spec_dir(tmp_path, _video(tmp_path / "green.mp4", "0x20c040"))
+        r, g, b = _first_frame(d)
+    finally:
+        if port:
+            port.close()
+    assert g > r + 60 and g > b + 60 and g > 150, "the clip plays the input video"
+    err = capsys.readouterr().err
+    assert "BACKEND_UNREACHABLE" in err and "playing the input video" in err and "BadStatusLine" not in err
+    assert not backend.uploads

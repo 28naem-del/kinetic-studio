@@ -84,9 +84,9 @@ clip plays the input video and prints one warning, so a render never stops for t
 
 | exit | code | when |
 |---|---|---|
-| 7 | `BACKEND_UNREACHABLE` | `KSTUDIO_COMFY_URL` is unset (`reason: not_configured`) or the server cannot be reached (`reason: unreachable`) or the URL answers with something that is not ComfyUI's JSON API, such as a web page, a proxy or login screen, or the wrong port (`reason: not_comfyui`) |
+| 7 | `BACKEND_UNREACHABLE` | `KSTUDIO_COMFY_URL` is unset (`reason: not_configured`); the server cannot be reached, a proxy in front of it answers 502, 503 or 504, or a reply breaks off (while a job runs: five polls in a row) (`reason: unreachable`); or the URL is not ComfyUI's JSON API: a web page, a 404 or login page, JSON that is not ComfyUI's, or a port that does not speak HTTP such as ssh or TLS (`reason: not_comfyui`) |
 | 6 | `MISSING_NODES` | the server lacks node types the workflow uses: install Openjutsu's node packs and restart ComfyUI |
-| 4 | `WORKFLOW_REJECTED`, `SWAP_FAILED`, `NO_OUTPUT`, `SWAP_TIMEOUT` | the server refused or failed the job; the message carries ComfyUI's error |
+| 4 | `UPLOAD_FAILED`, `WORKFLOW_REJECTED`, `SWAP_FAILED`, `NO_OUTPUT`, `DOWNLOAD_FAILED`, `SWAP_TIMEOUT` | ComfyUI itself refused or failed the job; the message carries its error or HTTP status |
 | 2 | `FILE_NOT_FOUND`, `USAGE` | an input file is missing or the arguments are wrong |
 
 With `--json`, stdout holds one JSON object (`ok`, `exit_code`, then the result fields or `error`) and progress
@@ -96,6 +96,8 @@ events go to stderr as JSON lines.
 
 The two workflows in `kstudio/workflows/` are Openjutsu's, unchanged, under the MIT licence (see
 `THIRD_PARTY_NOTICES.md`). The client is tested against an in-process mock of the ComfyUI HTTP API
-(submit, queue, history, download, rejection, the unreachable case and a server that answers with a web
-page). It has not been run here against a real GPU backend: no NVIDIA machine with Openjutsu's node packs
+(submit, queue, history, download, rejection, the unreachable case, a server that answers with a web
+page or an HTML 404, a proxy answering 502/503/504, a raw non-HTTP port, and replies cut off mid-body).
+While a job runs, a dropped or cut-off `/history` poll counts as a hiccup; the client gives up after
+five in a row. It has not been run here against a real GPU backend: no NVIDIA machine with Openjutsu's node packs
 was available.
