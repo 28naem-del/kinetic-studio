@@ -175,7 +175,7 @@ class Compositor:
         if hasattr(film, "defer_flash"):
             film.defer_flash = True  # flashes are applied per delivered frame in _post_linear
         self.rgba = np.zeros((self.H, self.W, 4), np.uint8)
-        self.surface = skia.Surface(self.rgba)
+        self.surface = skia.Surface(self.rgba, colorType=skia.ColorType.kRGBA_8888_ColorType)
         self.canvas = self.surface.getCanvas()
         self.acc = np.zeros((self.H, self.W, 3), np.float32)
         s = min(self.W, self.H) / 1080.0

@@ -46,7 +46,7 @@ def _film(tr="cut", bpm=120, **kw):
 def _frame(film, t):
     s = skia.Surface(W, H)
     film.draw(s.getCanvas(), t)
-    a = s.makeImageSnapshot().toarray()[..., :3].astype(int)  # RGBA
+    a = s.makeImageSnapshot().toarray(colorType=skia.ColorType.kRGBA_8888_ColorType)[..., :3].astype(int)
     return a[..., 0], a[..., 1], a[..., 2]
 
 
