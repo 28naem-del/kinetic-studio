@@ -181,3 +181,16 @@ def test_spec_timings_are_in_beats():
             bad.append((path, v))
     assert not bad, bad
     assert spec["scenes"][-1]["step"] == "-1/8b"                          # reversed cascade
+
+
+def test_cover_clears_its_plate_before_the_page_turn(film):
+    """The columns sink and the standfirst drops ahead of the wipe, so no figure stubs ride across the cut."""
+    def cobalt(img):
+        a = img[..., :3].astype(int)
+        lo = a[a.shape[0] // 2:]
+        return int(((lo.max(axis=2) - lo.min(axis=2)) > 90).sum())
+
+    cut = film.scenes[1].start
+    before = cobalt(_frame(film, 45, 0.25))
+    at_cut = cobalt(_frame(film, int(cut * 30) - 1, 0.25))
+    assert before > 2000 and at_cut < 0.02 * before, (before, at_cut)

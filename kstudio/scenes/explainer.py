@@ -206,16 +206,30 @@ class Cover(Scene):
     lines rise together over half a beat) and the standfirst rule on beat 0, one word of the
     headline on the accent highlighter on beat 1, the standfirst on the bottom safe line on beat 2.
     With `bars`, the lower half carries a figure plate: columns grow up from the standfirst rule
-    on beat 0 (a 16th apart) and the `accent` ones fill with the highlighter on beat 1."""
+    on beat 0 (a 16th apart) and the `accent` ones fill with the highlighter on beat 1.
+    `sub_at` moves the standfirst (default beat 2; on the accent beat it shares that tick).
+    `exit` (a time, e.g. "9/4b") clears the lower half ahead of an outgoing wipe: the columns
+    sink into the standfirst rule 1/16 beat apart and the standfirst drops back under its mask,
+    so the page turn carries the headline and the rule, not stubs of the figure."""
     defaults = {"index": "01", "kicker": "", "title": "Title", "accent": "", "subtitle": "", "sfx": "tick",
-                "page": "", "bars": []}
+                "page": "", "bars": [], "sub_at": None, "exit": None}
+    time_params = ("sub_at", "exit")
+
+    def _sub_t(self) -> float:
+        return self.bt(2) if self.p["sub_at"] is None else float(self.p["sub_at"])
+
+    def _exit(self, ctx: Ctx, k: float = 0.0) -> float:
+        """Exit progress 0..1 of element k (1/16 beat apart), 3/8 beat long; 0 without `exit`."""
+        if self.p["exit"] is None:
+            return 0.0
+        return EXIT(_su(ctx, float(self.p["exit"]) + k * ctx.beat_len / 16, 0.375))
 
     def cues(self) -> list[Cue]:
         out = []
         if self.p["accent"] or any(isinstance(b, dict) and b.get("accent") for b in self.p["bars"] or []):
             out.append(_tick(self.bt(1), 3.0, sound=self.p["sfx"]))
-        if self.p["subtitle"]:
-            out.append(_tick(self.bt(2), 0.0, sound=self.p["sfx"]))
+        if self.p["subtitle"] and not any(abs(c.at - self._sub_t()) < 1e-6 for c in out):
+            out.append(_tick(self._sub_t(), 0.0, sound=self.p["sfx"]))
         return out
 
     def draw(self, ctx: Ctx) -> None:
@@ -259,8 +273,9 @@ class Cover(Scene):
                        D.paint(ctx.pal(ctx.pal.on(self.ground), 0.4)))
             sb = D.set_lines(sf, sl, g.x0, top, sr.leading, sr.tk(ctx))
             for i, ln in enumerate(sb.lines):
-                _rise(ctx, ln.text, ln.x, ln.baseline, sf, ctx.pal("muted"), _bu(ctx, 2.0 + i / 16, 0.75), sr.tk(ctx),
-                      floor=g.safe_bottom)
+                us = _su(ctx, self._sub_t() + i * ctx.beat_len / 16, 0.75)
+                _rise(ctx, ln.text, ln.x, ln.baseline, sf, ctx.pal("muted"), min(us, 1.0 - self._exit(ctx)),
+                      sr.tk(ctx), floor=g.safe_bottom)
         bars = [b if isinstance(b, dict) else {"label": str(b)} for b in self.p["bars"] or []]
         if bars:
             self._plate(ctx, g, bars, blk.baseline + g.bl(12), floor, settled)
@@ -291,7 +306,7 @@ class Cover(Scene):
         acc_txt = ctx.pal(_on(ctx, "accent"))
         k_acc = 0
         for i, (bar, full) in enumerate(zip(bars, self.plate_rects(g, bars, top, floor))):
-            ug = SETTLE(_bu0(ctx, settled, i / 16, 0.75))
+            ug = SETTLE(_bu0(ctx, settled, i / 16, 0.75)) * (1.0 - self._exit(ctx, i))
             if ug <= 0:
                 continue
             r = skia.Rect(full.left(), floor - full.height() * ug, full.right(), floor)
@@ -319,8 +334,8 @@ class Cover(Scene):
 @register("definition")
 class Definition(Scene):
     """Dictionary entry on the anchor. Beat 0: the term in display 224 with the page rules.
-    Beat 1/2: pronunciation / part of speech in mono, the definition in body 53 and the optional
-    `note`. Beat 1: the accent highlighter behind the term (published as "term" for a match cut).
+    Beat 1/4 (as a wipe settles): pronunciation / part of speech in mono, the definition in body
+    53 and the optional `note`. Beat 1: the accent highlighter behind the term (published as "term" for a match cut).
     Beats 2, 3, ...: one figure of `stats` per beat on the bottom safe line; numeric figures
     after the first count up from the first one (a slow miss reads slow)."""
     defaults = {"index": "", "kicker": "", "term": "Term", "phonetic": "", "pos": "noun", "definition": "",
@@ -360,7 +375,7 @@ class Definition(Scene):
         mf = T["meta"].font(ctx, weight=500, size=SMALL.px(g))
         meta = "  ·  ".join(v for v in (self.p["phonetic"], self.p["pos"]) if v)
         if meta:
-            _rise(ctx, meta, g.x0, y, mf, ctx.pal("accent"), _bu(ctx, 0.5, 0.75), 0.02)
+            _rise(ctx, meta, g.x0, y, mf, ctx.pal("accent"), _bu(ctx, 0.25, 0.75), 0.02)
             y += g.bl(6)
         c.drawRect(skia.Rect(g.x0, y, g.x0 + g.content_w * SETTLE(_bu0(ctx, settled, 0.0, 0.75)), y + g.bl(0.25)),
                    rule)
@@ -371,7 +386,7 @@ class Definition(Scene):
             bl = D.wrap(bf, self.p["definition"], g.measure, br.tk(ctx))
             bb = D.set_lines(bf, bl, g.x0, y, br.leading, br.tk(ctx))
             for i, ln in enumerate(bb.lines):
-                _rise(ctx, ln.text, ln.x, ln.baseline, bf, ink, _bu(ctx, 0.5 + (i + 1) / 16, 0.75), br.tk(ctx))
+                _rise(ctx, ln.text, ln.x, ln.baseline, bf, ink, _bu(ctx, 0.25 + (i + 1) / 16, 0.75), br.tk(ctx))
             y = bb.baseline + g.bl(6)
         if self.p["note"]:
             nr = SMALL
@@ -379,7 +394,7 @@ class Definition(Scene):
             nl = D.wrap(nf, self.p["note"], g.measure, nr.tk(ctx))
             nb = D.set_lines(nf, nl, g.x0, y, nr.leading, nr.tk(ctx))
             for i, ln in enumerate(nb.lines):
-                _rise(ctx, ln.text, ln.x, ln.baseline, nf, ctx.pal("muted"), _bu(ctx, 0.75 + i / 16, 0.75), nr.tk(ctx))
+                _rise(ctx, ln.text, ln.x, ln.baseline, nf, ctx.pal("muted"), _bu(ctx, 0.5 + i / 16, 0.75), nr.tk(ctx))
         stats = list(self.p["stats"] or [])[:3]
         if not stats:
             return

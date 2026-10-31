@@ -4,7 +4,9 @@
 // The cover's lower half is a figure plate (CPU, L1-L3, RAM) standing on the standfirst rule;
 // the cache columns fill with the highlighter on beat 1. The bullets page is pushed in from the
 // right (a page turn, 03 / 04 -> 04 / 04) already composed: heading, standfirst, rules, numerals.
-// The definition is turned to by a wipe with a cobalt leading edge; its body lands on the half beat.
+// The standfirst lands with the highlighter on beat 1; from the 16th before the wipe the columns
+// sink into the rule and the standfirst drops, so the page turn carries the headline and rule only.
+// The definition is turned to by a wipe with a cobalt leading edge; its body rises as the wipe settles.
 // The diagram traces a miss from L1 to RAM on beat 3 (each connector lit a 16th apart) and the
 // RAM callout lands on beat 4. Pages 03 and 04 share the head band; list items are 71 over 53.
 // The end card runs a reversed 8th cascade, so its body and CTA are already set at the hard cut
@@ -25,7 +27,7 @@
       "title": "How does a\nCPU cache\nwork?", "accent": "cache", "subtitle": "A 15-second primer",
       "bars": [ { "label": "CPU", "solid": true }, { "label": "L1", "accent": true }, { "label": "L2", "accent": true },
                 { "label": "L3", "accent": true }, { "label": "RAM" } ],
-      "dur": "3b" },
+      "sub_at": "1b", "exit": "9/4b", "dur": "3b" },
     { "type": "definition", "id": "term", "index": "02", "kicker": "Definition", "page": "02 / 04",
       "term": "Cache", "phonetic": "/kash/", "pos": "noun · hardware",
       "definition": "A small, very fast memory next to the CPU that keeps copies of recently used data.",
