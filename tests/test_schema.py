@@ -6,10 +6,13 @@ import pytest
 from conftest import EXAMPLES
 
 from kstudio import brief, schema
+from kstudio.modes import MODES as MODE_TABLE
 from kstudio.scenes import REGISTRY
 from kstudio.spec import load_spec
 
 MODES = sorted(d for d in os.listdir(EXAMPLES) if os.path.isdir(os.path.join(EXAMPLES, d)))
+# examples named after a mode; the others (examples/clip) show one scene type inside some mode
+MODE_EXAMPLES = [m for m in MODES if m in MODE_TABLE]
 
 
 def test_schema_lists_every_registered_scene_type():
@@ -92,7 +95,7 @@ def test_fix_prompt_is_actionable():
     assert "/scenes/0/type" in p and "JSON object" in p
 
 
-@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("mode", MODE_EXAMPLES)
 def test_brief_pack_embeds_schema_examples_and_rules(mode):
     pack = brief.prompt_pack("A 15 second teaser for a note-taking app", mode, duration=15)
     assert pack["schema"]["$schema"].endswith("2020-12/schema")

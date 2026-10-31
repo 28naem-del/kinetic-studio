@@ -8,7 +8,6 @@ import re
 import subprocess
 import sys
 import threading
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -18,7 +17,8 @@ import pytest
 from kstudio import mcp_server as M
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOL_NAMES = ["list_modes", "list_scenes", "get_schema", "validate_spec", "new_spec", "preview", "render", "audit"]
+TOOL_NAMES = ["list_modes", "list_scenes", "get_schema", "validate_spec", "new_spec", "preview", "render", "audit",
+              "swap"]  # swap: the optional backend tool from kstudio/swap.py, listed after the built-ins
 MODERN = {"io.modelcontextprotocol/protocolVersion": M.MODERN_VERSION,
           "io.modelcontextprotocol/clientCapabilities": {}}
 
