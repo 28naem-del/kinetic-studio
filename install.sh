@@ -11,6 +11,6 @@ case "$encoders" in *libx264*) ;; *) echo "your ffmpeg lacks libx264"; exit 1;; 
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip >/dev/null
 .venv/bin/pip install -r requirements.txt
-if [ "${1:-}" = "--dev" ]; then .venv/bin/pip install pytest ruff mypy pre-commit; fi
+if [ "${1:-}" = "--dev" ]; then .venv/bin/pip install pytest ruff mypy pre-commit jsonschema; fi
 chmod +x bin/kstudio
 echo "OK. Try:  bin/kstudio new kinetic my_teaser && bin/kstudio render my_teaser"

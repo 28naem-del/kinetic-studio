@@ -1,0 +1,542 @@
+[
+  {
+    "type": "function",
+    "name": "kstudio_list_modes",
+    "description": "List the video modes (kinetic, explainer, promo, data, social) with their theme, music style and tempo, default transition and audit thresholds, plus the output presets, quality levels, frame rates and the time units specs use. Call this first.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "required": []
+    },
+    "strict": true
+  },
+  {
+    "type": "function",
+    "name": "kstudio_list_scenes",
+    "description": "List the scene types a spec can use (title, slam, counter, bars, karaoke, ...) with a one-line summary and their parameters with default values. Pass `type` for one scene.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only this scene type, e.g. \"counter\"."
+        },
+        "verbose": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Include parameters and defaults. Default true."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "verbose"
+      ]
+    },
+    "strict": true
+  },
+  {
+    "type": "function",
+    "name": "kstudio_get_schema",
+    "description": "Return the JSON Schema of a spec (draft 2020-12). With `mode`, also return that mode's defaults and its example spec, the best starting point for writing a new one.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "kinetic",
+            "explainer",
+            "promo",
+            "data",
+            "social",
+            null
+          ],
+          "description": "Video mode."
+        },
+        "scene_types": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Narrow the scene part of the schema to these types. The full schema is large; narrowing keeps it small."
+        },
+        "include_example": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Include the mode's example spec. Default true."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "scene_types",
+        "include_example"
+      ]
+    },
+    "strict": true
+  },
+  {
+    "type": "function",
+    "name": "kstudio_validate_spec",
+    "description": "Check a spec without rendering: structure, scene types, parameters, time expressions, transitions, then a dry build and the beat-grid lint. Returns ok, errors and warnings, each with a JSON Pointer path and a hint. Pass spec_path, or spec_json for a spec that is not on disk yet.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "spec_path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Path of a spec file (spec.json / spec.jsonc / spec.js) or of a project directory that contains one."
+        },
+        "spec_json": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The spec itself as JSON text (comments and trailing commas allowed). Use instead of spec_path."
+        },
+        "base_dir": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Directory relative asset paths in spec_json resolve against. Default: the server's working directory."
+        },
+        "strict": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Treat unknown keys as errors. Default false."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "spec_path",
+        "spec_json",
+        "base_dir",
+        "strict"
+      ]
+    },
+    "strict": true
+  },
+  {
+    "type": "function",
+    "name": "kstudio_new_spec",
+    "description": "Create a project directory from a mode's example (spec.json plus any assets). Pass spec_json to write your own spec instead of the example. Refuses a non-empty directory unless force is true.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "kinetic",
+            "explainer",
+            "promo",
+            "data",
+            "social"
+          ],
+          "description": "Video mode."
+        },
+        "dir": {
+          "type": "string",
+          "description": "Project directory to create."
+        },
+        "spec_json": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional spec as JSON text to write as spec.json."
+        },
+        "force": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Write into a non-empty directory. Default false."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "dir",
+        "spec_json",
+        "force"
+      ]
+    },
+    "strict": true
+  },
+  {
+    "type": "function",
+    "name": "kstudio_preview",
+    "description": "Render still frames (the middle of every scene and every transition, or the times in `at`) and a labelled contact sheet, in a few seconds, without audio. Returns the file paths and the contact sheet as an image. Use it to check layout before a full render.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "spec_path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Path of a spec file (spec.json / spec.jsonc / spec.js) or of a project directory that contains one."
+        },
+        "spec_json": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The spec itself as JSON text (comments and trailing commas allowed). Use instead of spec_path."
+        },
+        "at": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number"
+          },
+          "description": "Times in seconds to render."
+        },
+        "preset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "reel",
+            "story",
+            "landscape",
+            "youtube",
+            "square",
+            "portrait",
+            null
+          ],
+          "description": "Output size: reel/story 1080x1920, landscape/youtube 1920x1080, square 1080x1080, portrait 1080x1350. Default reel."
+        },
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.1,
+          "maximum": 1.0,
+          "description": "Resolution scale of the stills. Default 0.5."
+        },
+        "out_dir": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where to write stills. Default <project>/out/preview."
+        },
+        "include_image": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Attach the contact sheet image. Default true."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "spec_path",
+        "spec_json",
+        "at",
+        "preset",
+        "scale",
+        "out_dir",
+        "include_image"
+      ]
+    },
+    "strict": true
+  },
+  {
+    "type": "function",
+    "name": "kstudio_render",
+    "description": "Render the final MP4 (H.264 High + AAC 48 kHz, -14 LUFS, -1 dBTP) with motion blur, grade, music and sound effects, then audit it. Sends progress notifications when the request has a progressToken. Resumable: an interrupted render keeps finished chunks. ok is true when the video was written and passed the audit; failed_checks lists what did not.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "spec_path": {
+          "type": "string",
+          "description": "Path of a spec file (spec.json / spec.jsonc / spec.js) or of a project directory that contains one."
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Output .mp4 path. Default <project>/out/<name>_<preset>.mp4."
+        },
+        "preset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "reel",
+            "story",
+            "landscape",
+            "youtube",
+            "square",
+            "portrait",
+            null
+          ],
+          "description": "Output size: reel/story 1080x1920, landscape/youtube 1920x1080, square 1080x1080, portrait 1080x1350. Default reel."
+        },
+        "fps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "enum": [
+            24,
+            25,
+            30,
+            50,
+            60,
+            null
+          ],
+          "description": "Frame rate. Default 30."
+        },
+        "quality": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "draft",
+            "standard",
+            "high",
+            null
+          ],
+          "description": "draft (no motion blur, fast), standard (default) or high."
+        },
+        "k4": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Double the preset resolution (4K). Default false."
+        },
+        "workers": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Render processes. Default: sized to free memory and CPUs."
+        },
+        "fresh": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Ignore finished chunks from an earlier run. Default false."
+        },
+        "audit": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Run the quality audit. Default true."
+        },
+        "snap": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "beat",
+            "8th",
+            "16th",
+            "bar",
+            null
+          ],
+          "description": "Snap seconds-valued scene lengths and starts to this beat division."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "spec_path",
+        "output",
+        "preset",
+        "fps",
+        "quality",
+        "k4",
+        "workers",
+        "fresh",
+        "audit",
+        "snap"
+      ]
+    },
+    "strict": true
+  },
+  {
+    "type": "function",
+    "name": "kstudio_audit",
+    "description": "Measure a finished video: motion ratio and longest hold, black frames, codec and pixel format, loudness and true peak, frame rate (r = avg = n/d), frame count and audio/video length. ok is true when every check passes.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "video": {
+          "type": "string",
+          "description": "Path of the video file."
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "kinetic",
+            "explainer",
+            "promo",
+            "data",
+            "social",
+            null
+          ],
+          "description": "Use this mode's motion and hold thresholds."
+        },
+        "fps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Expected frame rate."
+        },
+        "frames": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Expected video frame count (+-1)."
+        },
+        "min_motion": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Minimum motion ratio."
+        },
+        "max_hold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Longest allowed still hold in seconds."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "video",
+        "mode",
+        "fps",
+        "frames",
+        "min_motion",
+        "max_hold"
+      ]
+    },
+    "strict": true
+  },
+  {
+    "type": "function",
+    "name": "kstudio_swap",
+    "description": "Optional. Replace a person in a video with a character image (mode simple), or change a tracked object (mode object), on a ComfyUI server running Openjutsu's workflows, set by KSTUDIO_COMFY_URL. Downloads the MP4 for use as a clip scene's src. Returns BACKEND_UNREACHABLE when no backend is configured or reachable; nothing else depends on it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "video": {
+          "type": "string",
+          "description": "Path of the source video."
+        },
+        "character": {
+          "type": "string",
+          "description": "Path of the character / reference image."
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "simple",
+            "object",
+            null
+          ],
+          "description": "simple (default) or object."
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "simple: who gets replaced; object: what the target becomes."
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What SAM tracks (simple: person, object: hair by default)."
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Generation seed. Default 0."
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Output .mp4. Default ./out/swap/<key>.mp4."
+        },
+        "timeout": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Seconds to wait. Default 3600."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "video",
+        "character",
+        "mode",
+        "prompt",
+        "target",
+        "seed",
+        "output",
+        "timeout"
+      ]
+    },
+    "strict": true
+  }
+]

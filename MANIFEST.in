@@ -1,0 +1,10 @@
+include LICENSE THIRD_PARTY_NOTICES.md README.md CHANGELOG.md requirements.txt
+recursive-include kstudio/assets/fonts *.ttf *.txt
+recursive-include examples *.json *.jsonc *.js *.mjs *.png *.jpg *.svg *.wav *.mp3
+recursive-include docs *.md
+recursive-include tests *.py
+prune examples/*/out
+prune examples/*/.kstudio_work
+recursive-include kstudio/workflows *.json *.md
+include examples/clip/footage.mp4 examples/clip/make_footage.sh
+global-exclude *.pyc __pycache__ .DS_Store

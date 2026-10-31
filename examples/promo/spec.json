@@ -1,29 +1,42 @@
-// Product / app promo: device mockup with callouts, feature grid, CTA with a tap, logo sting.
+// Product launch film, beat-locked at 112 BPM: 8 + 8 + 8 + 4 beats, every cut on a downbeat.
+// device (3D-tilted phone + callouts) -> features (one per 2 beats) -> cta (pulses on the beat,
+// pressed on the downbeat) -> brand (wordmark mask reveal on the hit).
 // Put a real screenshot at "screen": "screen.png" (9:19.5 portrait) or leave it out for the procedural UI.
+// Audit thresholds are the promo mode defaults. Held copy keeps moving by design: beat ripples and a
+// turning 3D icon on the features, a light sweep, ring wave and slow headline push on the CTA, a beat
+// ring and slow wordmark push on the end card. The CTA's copy leaves line by line just ahead of the
+// circle wipe, which opens from the button ("at" = the button centre). "post" deepens the studio grade.
 {
   "mode": "promo",
   "music": { "style": "bright", "bpm": 112 },
+  "post": { "bloom": 0.4, "vignette": 0.32,
+            "grade": { "base": "studio", "contrast": 0.13, "shadow_amount": 0.14, "highlight_amount": 0.06 } },
   "markers": [
-    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },
+    { "kind": "section", "at": "0b", "name": "intro", "energy": 1 },
     { "kind": "section", "at": "features", "name": "body", "energy": 2 },
     { "kind": "section", "at": "cta", "name": "lift", "energy": 3 }
   ],
   "scenes": [
-    { "type": "device", "id": "hero", "headline": "Meet Flowly", "sub": "Your day, in focus",
-      "ui": { "title": "Today", "accent": "accent" },
+    { "type": "device", "id": "hero", "kicker": "Introducing", "headline": "Flowly.", "sub": "Your day, in focus.",
+      "ui": { "title": "Today", "subtitle": "Good morning, Sam" },
+      "yaw": [-12, 12], "tilt": "4b", "land": "1b", "first_callout": "3b", "callout_gap": "1b",
       "callouts": [
-        { "text": "Smart focus timer", "icon": "clock", "side": "left" },
-        { "text": "Streaks that stick", "icon": "spark", "side": "right" },
-        { "text": "Private by design", "icon": "lock", "side": "left" }
-      ], "scroll": 0.4, "dur": 4.3 },
-    { "type": "features", "id": "features", "heading": "Built for deep work",
+        { "text": "Smart focus timer", "icon": "clock", "side": "left", "x": 0.30, "y": 0.27 },
+        { "text": "Streaks that stick", "icon": "spark", "side": "right", "x": 0.66, "y": 0.36 },
+        { "text": "Private by design", "icon": "lock", "side": "left", "x": 0.13, "y": 0.935 }
+      ], "scroll": 0.4, "dur": "8b" },
+    { "type": "features", "id": "features", "heading": "Built for deep work", "per": "2b",
       "items": [
-        { "icon": "bolt", "title": "Instant", "text": "Start a session in one tap" },
-        { "icon": "chart", "title": "Insights", "text": "See where your hours go" },
-        { "icon": "bell", "title": "Gentle", "text": "Nudges, never nags" },
-        { "icon": "shield", "title": "Private", "text": "Your data stays yours" }
-      ], "dur": 2.7 },
-    { "type": "cta", "id": "cta", "headline": "Start free today", "button": "Get Flowly", "sub": "iOS · Android · Web", "dur": 2.4 },
-    { "type": "logo", "text": "flowly", "tagline": "focus, beautifully", "url": "flowly.app", "dur": 2.4, "transition": "zoom" }
+        { "icon": "bolt", "title": "Instant", "text": "Start a session in one tap." },
+        { "icon": "chart", "title": "Insights", "text": "See where your hours go." },
+        { "icon": "bell", "title": "Gentle", "text": "Nudges, never nags." },
+        { "icon": "shield", "title": "Private", "text": "Your data stays yours." }
+      ], "dur": "8b", "transition": "push-left" },
+    { "type": "cta", "id": "cta", "kicker": "Free for 14 days", "headline": "Start free today.", "button": "Get Flowly",
+      "done": "You're in", "note": "No card needed. Cancel anytime.", "sub": "iOS · Android · Web", "proof": "4.9 · 20k ratings",
+      "lockup": "Flowly", "mark": "spark", "tap_at": "4b", "dur": "8b", "transition": { "kind": "slice", "n": 6 } },
+    { "type": "brand", "id": "end", "text": "flowly", "tagline": "Focus, beautifully.", "url": "flowly.app",
+      "mark": "spark", "badges": ["App Store", "Google Play"], "hit_at": "1b", "dur": "4b",
+      "transition": { "kind": "wipe", "shape": "circle", "at": [0.5, 0.624] } }
   ]
 }

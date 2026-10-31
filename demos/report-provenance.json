@@ -1,0 +1,62 @@
+{
+  "data": {
+    "changed_json_pointers": [
+      "/file"
+    ],
+    "kind": "public path-redacted derivative; not a new audit",
+    "metrics_and_checks": "unchanged",
+    "original_report_sha256": "92ce721e87d038505ad50bfcdf196f6e881940cad1d9d897af489649c5dc9257",
+    "raw_audit_sha256": "a9e51ca9850e72796d327643961761a8c34db8fcc6fc106cc185a8cd8b8eec5f",
+    "report_sha256": "96439a57c4c810884a611f71f45d0ae33410fe5eb0d97d1f4711f04c8c19db47",
+    "selection": "/deliveries/phone/candidate2; lossless JSON subtree extraction, formatting only; NOT a new audit",
+    "video_sha256": "55682d371778b66e9dcc5f9e12ba785f0da072abf575e180e270b063cc1c1b3a"
+  },
+  "explainer": {
+    "changed_json_pointers": [
+      "/file"
+    ],
+    "kind": "public path-redacted derivative; not a new audit",
+    "metrics_and_checks": "unchanged",
+    "original_report_sha256": "5fb05482368d32ac9db1d73d00c2d1e01b7995168a0e516e7b3f1396a4ffcef5",
+    "raw_audit_sha256": "25de91ca71890d48b198356b88f9271684057820e712416bca6aaf4c0fa20248",
+    "report_sha256": "571863ac9977b0abaaeefabae6e5b4f8e407a03729b209cf49a017646aef073a",
+    "selection": "/deliveries/phone/candidate2; lossless JSON subtree extraction, formatting only; NOT a new audit",
+    "video_sha256": "1040ec0a84b2f8d6f3dfb506e8898afb636a50591370452634d5f8b8cfd58734"
+  },
+  "kinetic": {
+    "changed_json_pointers": [
+      "/file"
+    ],
+    "kind": "public path-redacted derivative; not a new audit",
+    "metrics_and_checks": "unchanged",
+    "original_report_sha256": "4fc13e1028635ea2732d24c64c388b93e3511a16219c36dfc37e50dd1c415bc6",
+    "raw_audit_sha256": "4fc13e1028635ea2732d24c64c388b93e3511a16219c36dfc37e50dd1c415bc6",
+    "report_sha256": "2e67e6d45e5b41e3d5abf5a12771056da90f5f40abb929ceab6dc53a50a0e9cd",
+    "selection": "whole raw native audit copied byte-for-byte",
+    "video_sha256": "eb33289136334ca573d262534e29336fe3394db3d66ff8543aba72d032763859"
+  },
+  "promo": {
+    "changed_json_pointers": [
+      "/file"
+    ],
+    "kind": "public path-redacted derivative; not a new audit",
+    "metrics_and_checks": "unchanged",
+    "original_report_sha256": "b19c7e875894d175d669e9bbb0a515651fa1b5e896c0bdd0482a408b7c31d4bc",
+    "raw_audit_sha256": "fe2818b997ee652ebaf5f7a1fa4ce5dda5fbc82d521d84d6c555aec742d2fe65",
+    "report_sha256": "6720919d6c4340960dee6da631164f4529489545e3ebc885e6b227efdcc7d6c1",
+    "selection": "/deliveries/phone/candidate2; lossless JSON subtree extraction, formatting only; NOT a new audit",
+    "video_sha256": "37ee49b4d65d308244d648ee5bdbebbd6c838d1bee0c3888a4fd37312d7bc58d"
+  },
+  "social": {
+    "changed_json_pointers": [
+      "/file"
+    ],
+    "kind": "public path-redacted derivative; not a new audit",
+    "metrics_and_checks": "unchanged",
+    "original_report_sha256": "2593e36f1f853c1a15704cf6707fff844ecc6aca73e0803242176c90b0e41bef",
+    "raw_audit_sha256": "b0fb40cf05d7ce81ddabf3ac7ad5bbf3b9b884de84b69a78923b52f151677111",
+    "report_sha256": "8ffe86674be9b350d078975f0d026c658699e43331b251d0dd67d94595f9c268",
+    "selection": "/deliveries/phone/candidate2; lossless JSON subtree extraction, formatting only; NOT a new audit",
+    "video_sha256": "46f5570e93e0225afd07f636df53b0783a61e18f2ad0e40b16bc12543cc8aedf"
+  }
+}

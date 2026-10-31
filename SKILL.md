@@ -1,134 +1,231 @@
 ---
 name: kinetic-studio
-description: Turn a short brief into a finished, beat-synced motion-graphics video (MP4, 9:16/16:9/1:1, 30/60 fps, optional 4K) with original synthesized music and SFX, normalised to -14 LUFS, and an automatic quality audit. Five modes - kinetic type teaser, explainer/education, product/app promo, data/crypto stats, social quote/karaoke clip. Use when the user asks for a reel, short, teaser, explainer, promo, stats or quote video and no footage is needed. Runs locally (Python + Skia + ffmpeg); no paid APIs, no sign-ups.
+description: Turn a short brief into a finished, beat-synced motion-graphics video (MP4, 9:16 / 16:9 / 1:1 / 4:5, 24-60 fps, optional 4K) with procedural music and sound effects, mixed to -14 LUFS, and an automatic quality audit. Five modes - kinetic type teaser, explainer, product promo, data story, social quote or karaoke clip. Use when someone asks for a reel, short, teaser, explainer, promo, stats video or quote video and no camera footage is needed. The core renderer runs locally (Python, Skia, ffmpeg) without paid APIs, accounts or cloud calls; optional swap sends chosen video and character inputs to a configured ComfyUI backend, only for inputs you agree to share.
+license: MIT
+compatibility: Python 3.10+ and ffmpeg/ffprobe with libx264 on PATH. Works through MCP (stdio or HTTP), the command line or Python.
+metadata:
+  version: "0.2"
+  triggers: "make a reel, make a short, kinetic typography, animated text video, explainer video, product promo video, app launch video, stats video, data video, quote video, karaoke captions, motion graphics, beat-synced video"
 ---
 
 # Kinetic Studio
 
-A local, programmatic video engine. You write a small JSON spec (scenes + timeline markers);
-the engine renders it in parallel, scores it with procedural music and SFX locked to the beat
-grid, mixes to -14 LUFS / -1 dBTP and audits the result.
+A local, programmatic video engine. You write a small JSON spec (scenes on a beat grid plus timeline
+markers); the engine renders it in parallel with motion blur and a film grade, scores it with
+procedural music and sound effects locked to the beat, mixes to -14 LUFS / -1 dBTP and audits the
+file. Same spec, same video: renders are deterministic and resumable.
 
-Project root: the folder containing this file (call it `$KSTUDIO`). Launcher: `$KSTUDIO/bin/kstudio`.
-First run on a new machine: `bash $KSTUDIO/install.sh` (needs python3 >= 3.10 and ffmpeg with libx264).
+## When to use
+
+- Short vertical or landscape videos built from words, numbers, charts, UI mock-ups and logos:
+  teasers, announcements, explainers, product promos, KPI or market recaps, quotes, captions.
+- Anything that should cut on the beat of the music.
+
+Not for: generating live-action footage, faces or voices, lip-sync or text-to-speech. A user's own
+photo can go in an `image` scene and their own video in a `clip` scene (any mode: trimmed on the
+beat, with titles, captions or counters drawn over it in `over`). The engine does not write copy:
+you write the words from the brief.
+
+## 30-second path
+
+Pick one way in. All three run the same engine and return the same JSON.
+
+**MCP (any MCP-capable agent).** Register the server, then call its tools:
+
+```
+command: uvx
+args:    ["--from", "git+https://github.com/28naem-del/kinetic-studio", "kstudio-mcp"]
+```
+
+From a clone instead: `python -m kstudio.mcp_server` with the clone as working directory.
+Per-framework snippets: `docs/quickstarts/`.
+
+**Command line.**
+
+```
+kstudio new kinetic my-reel            # starter project from the mode's example
+kstudio validate my-reel               # errors with JSON Pointer paths and hints
+kstudio preview my-reel                # stills + contact_sheet.jpg in a few seconds
+kstudio render my-reel                 # my-reel/out/my-reel_reel.mp4 + .report.json
+```
+
+`kstudio --json <command>` prints exactly one JSON object; exit codes: 0 ok, 2 usage, 3 spec
+invalid, 4 render failed, 5 audit failed, 6 missing tool (`kstudio doctor` checks ffmpeg and the
+rest). `kinetic-studio` is the same command.
+
+**Function calling without MCP.** Load `docs/tools/functions.json` (or `tools.schema.json`) as
+your tool list and dispatch each call with
+`from kstudio.mcp_server import run_tool; run_tool(name, arguments_json)`.
 
 ## Workflow (brief -> video)
 
-1. **Pick the mode** from the brief (table below). If unclear, ask one question or default to `kinetic`.
-2. `bin/kstudio new <mode> <project_dir>` copies a working example spec into `<project_dir>/spec.json`.
-3. **Rewrite the spec** from the brief (rules below). Keep 8-15 s for social, one idea per scene.
-4. `bin/kstudio info <project_dir>` - validates and prints the resolved timeline (scene starts, markers).
-   Fix any `kstudio: error:` it reports.
-5. `bin/kstudio preview <project_dir>` - renders stills + `contact_sheet.jpg` in ~1 s. **Look at the
-   contact sheet** (Read the image) before the full render: check text fits, nothing overlaps, the
-   last frame is the intended end card.
-6. `bin/kstudio render <project_dir> --workers auto --preset reel` - final MP4 at
-   `<project_dir>/out/<name>_reel.mp4`, plus `.report.json` (timings, loudness, audit) and
-   `.render.log` (JSONL progress). Exit code 3 = audit failed, 2 = spec error.
-7. Report the path, duration, audit verdict and any failed check. If the audit fails on motion,
-   shorten holds (smaller `dur`), add a scene, or use a busier transition; do not just relax thresholds.
+| step | MCP tool | command line |
+|---|---|---|
+| 1. see what exists | `list_modes`, `list_scenes` | `kstudio modes`, `kstudio scenes -v` |
+| 2. get the contract | `get_schema {mode}` (schema + example spec) | `kstudio schema --mode <m>`, `docs/SCENES.md` |
+| 3. start a project | `new_spec {mode, dir, spec_json?}` | `kstudio new <mode> <dir>` |
+| 4. check the spec | `validate_spec {spec_path}` | `kstudio validate <dir>` |
+| 5. look before rendering | `preview {spec_path}` (contact sheet image) | `kstudio preview <dir>` |
+| 6. render | `render {spec_path}` (progress notifications) | `kstudio render <dir>` |
+| 7. verify | `audit {video, mode}` (render already audits) | `kstudio audit <video> --mode <m>` |
 
-Interrupted renders resume: re-run the same command; finished 2-second chunks are reused
-(`--fresh` forces a clean render). Any change to the spec, assets or engine invalidates old chunks.
+1. **Pick the mode** from the brief (table below). If unclear, default to `kinetic`.
+2. **Write the spec** from the mode's example: keep its structure, replace the words, numbers and
+   colours. 8-15 s for social, one idea per scene.
+3. **Validate** and fix every error (each has a JSON Pointer `path`, a `message` and a `hint`).
+   Fix warnings about off-grid lengths too.
+4. **Preview and look at the contact sheet**: text fits, nothing overlaps, the last frame is the
+   intended end card.
+5. **Render**, then report the output path, duration, audit verdict and any failed check. If motion
+   or hold checks fail, shorten holds, add a scene or use a busier transition; do not relax thresholds.
 
-## Modes
+Interrupted renders resume: run the same render again and finished 2-second chunks are reused
+(`fresh: true` / `--fresh` forces a clean render).
 
-| mode | use for | look / sound | key scenes |
-|---|---|---|---|
-| `kinetic` | hype teasers, announcements, hooks | black/bone/red, whip transitions, `drive` 128 BPM | `slam`, `stack`, `marquee`, `type3d`, `scramble`, `countdown`, `burst` |
-| `explainer` | education, science, "what is X" | navy/teal lab theme, fades, `calm` 84 BPM | `title`, `definition`, `diagram`, `bullets`, `keyfact`, `text`, `end_card` + `sources` lower-thirds |
-| `promo` | app/product launches | violet studio, push transitions, `bright` 112 BPM | `device`, `features`, `cta`, `logo`, `image` |
-| `data` | market/crypto/KPI stories | terminal green/red, zoom transitions, `pulse` 120 BPM | `counter`, `stat_grid`, `bars`, `line`, `candles`, `ticker` |
-| `social` | quotes, tips, voice-style captions | warm espresso/amber, `lofi` 86 BPM | `quote`, `karaoke`, `text` |
+## Beat units (the one rule that matters)
 
-Any scene works in any mode; the mode only sets theme, music, camera feel, transitions and audit
-thresholds. Full parameter list: `bin/kstudio scenes -v` or `docs/SCENES.md`.
+Every time and length can be written in beats at the music tempo, and should be:
 
-## Spec cheat-sheet
+| write | means |
+|---|---|
+| `"4b"`, `"1/2b"`, `"3/4b"` | 4 beats, half a beat, three quarters of a beat |
+| `"1bar"`, `"2bars"` | one bar (4 beats), two bars |
+| `"bar3"` | the start of bar 3 (1-based, like a DAW) |
+| `"drop"`, `"drop-2b"`, `"intro+1.25s"`, `"end-1b"` | a named marker or scene id, with offsets |
+| `1.5`, `"1.5s"`, `"250ms"` | seconds (avoid for scene lengths) |
+
+- Scene lengths: whole beats, ideally 2b, 4b or 8b. Cuts, transition windows and their sound
+  effects then land on the grid. Validation warns when a length is off the grid.
+- `"snap": true` in the spec (or `snap` on render) moves seconds-valued lengths and starts onto the
+  beat grid.
+- With your own music (`"music": {"file": "track.mp3"}`) the tempo and downbeat come from the file.
+
+## JSON contract
+
+**Spec** (comments and trailing commas allowed; full schema: `get_schema`):
 
 ```jsonc
 {
-  "mode": "kinetic",                 // kinetic | explainer | promo | data | social
-  "handle": "@you",                  // small corner handle (optional)
-  "progress": false,                 // thin progress bar at the bottom
-  "theme": "ink",                    // or {"base": "ink", "accent": "#ff3b30", ...}
-  "music": { "style": "drive", "bpm": 128, "gain": -3, "sfx": 1.0 },
-  //  styles: drive | calm | bright | pulse | lofi | none
-  //  own track: { "file": "track.mp3", "start": 12.0 }  -> beats are detected from the file
-  "transition": "whip",              // default between scenes: cut flash fade whip push zoom squash (+ "-left" etc.)
+  "mode": "kinetic",                       // kinetic | explainer | promo | data | social
+  "handle": "@you",                        // small corner handle (optional)
+  "theme": "ink",                          // ink | lab | studio | terminal | warm, or {"base": "ink", "accent": "#ff3b30"}
+  "music": { "style": "drive", "bpm": 128 },  // drive | calm | bright | pulse | lofi | none, or {"file": "track.mp3"}
+  "transition": "whip",                    // default between scenes
   "markers": [
-    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },   // energy 0-3 drives music layers + camera
+    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },   // energy 0-3 drives music layers and camera
     { "kind": "section", "at": "drop", "name": "drop", "energy": 3 },
-    { "kind": "sfx", "at": "drop-2b", "sound": "riser_short" },      // see `bin/kstudio sfx`
-    { "kind": "hit", "at": "8b", "strength": 0.8 },                  // camera shake / flash accent
-    { "kind": "lower_third", "at": 0.6, "dur": 2.5, "tag": "Note", "text": "..." },
-    { "kind": "cue", "at": "bar3", "name": "music_stop" }            // hard music stop
+    { "kind": "sfx", "at": "drop-2b", "sound": "riser_short" },
+    { "kind": "hit", "at": "8b", "strength": 0.8 },
+    { "kind": "lower_third", "at": "1b", "dur": "4b", "tag": "Note", "text": "..." }
   ],
-  "captions": [ { "at": 1.0, "dur": 2.0, "text": "burned-in caption" } ],
-  "sources":  [ { "at": "studied+0.6", "dur": 2.3, "text": "Author et al., Journal, Year" } ],
-  "scenes": [ { "type": "slam", "id": "open", "words": ["ONE", "TWO"], "dur": "4b", "transition": "flash" } ]
+  "scenes": [
+    { "type": "slam", "id": "open", "words": ["STOP", "SCROLLING"], "dur": "4b" },
+    { "type": "stack", "lines": ["ONE IDEA", "PER", "BEAT"], "dur": "4b", "transition": "whip-left" },
+    { "type": "burst", "id": "drop", "text": "GO", "dur": "4b", "transition": "flash" }
+  ]
 }
 ```
 
-**Times** accept seconds (`1.5`, `1.5s`, `250ms`), beats (`4b`, `b4`), bars (`1bar`, `2bars`,
-`bar3` = start of bar 3), named markers and scene ids (`drop`, `studied+0.6`, `drop-2b`, `end`).
-Scenes run back-to-back unless given `at`. Durations in beats (`"dur": "4b"`) keep cuts on the beat.
-Comments (`//`, `/* */`) and trailing commas are allowed in spec.json.
+Transitions (per scene, on the incoming one): `cut`, `flash`, `cross` (alias `fade`), `dissolve`,
+`whip`, `push`, `zoom`, `squash`, `wipe` (`rect`, `circle`, `diagonal`, `type`), `slice`, `split`,
+`match` (shared-element hand-off). Shorthand `"whip-left"`, `"wipe-circle"`, or a dict
+`{"kind": "wipe", "shape": "circle", "dur": "1b", "dir": "up", "on": "downbeat"}`.
+
+**Tool results.** Every tool returns one JSON object. `ok` says whether the thing asked about is good
+(spec valid, video rendered and audited). On failure there is `error: {code, message, hint}` and the
+MCP result has `isError: true`; validation problems are a normal result with `ok: false` and an
+`errors` list. Codes: `USAGE`, `MODE_UNKNOWN`, `DIR_NOT_EMPTY`, `FILE_NOT_FOUND`, `SPEC_INVALID`,
+`SPEC_NOT_FOUND`, `SPEC_PARSE`, `RENDER_FAILED`, `AUDIT_FAILED`, `MISSING_TOOL`, `INVALID_ARGUMENTS`, `INTERNAL_ERROR`.
+
+## Modes
+
+| mode | use for | look / sound | example scenes |
+|---|---|---|---|
+| `kinetic` | hype teasers, announcements, hooks | ink: black, bone, signal red; whips; `drive` 128 BPM | `slam`, `stack`, `marquee`, `type3d`, `scramble`, `countdown`, `burst` |
+| `explainer` | education, "what is X" | lab: editorial paper, navy, cobalt; crosses; `calm` 84 BPM | `cover`, `definition`, `diagram`, `bullets`, `keyfact`, `end_card` |
+| `promo` | app and product launches | studio: violet gradient; pushes; `bright` 112 BPM | `device`, `features`, `cta`, `brand`, `logo`, `image` |
+| `data` | market, crypto, KPI stories | terminal: green up, red down; cuts; `pulse` 120 BPM | `counter`, `line`, `candles`, `bars`, `stat_grid`, `ticker` |
+| `social` | quotes, tips, spoken-line captions | warm: espresso, amber; `lofi` 86 BPM | `hook`, `quote`, `karaoke`, `follow`, `text` |
+
+Any scene works in any mode; the mode only sets theme, music, camera feel, default transition and
+audit thresholds. Parameters per scene: `list_scenes {type}` or `docs/SCENES.md`.
 
 ## Brief -> spec rules per mode
 
-**kinetic** - Hook in the first 2 beats (`slam` with 2-4 words). One idea per scene, 2-4 words per
-line, ALL CAPS reads best. Build energy with sections 1 -> 2 -> 3, put `riser_short` 2 beats before
-the drop, end on `burst` or `logo`. Durations in beats (`3b`, `4b`).
+**kinetic.** Hook in the first 2 beats (`slam`, 2-4 words). One idea per scene, 2-4 words per line;
+capitals read best. Build energy with sections 1 -> 2 -> 3, put `riser_short` 2 beats before the
+drop, end on `burst` or `logo`.
 
-**explainer** - Structure: `title` (question) -> `definition` -> `diagram` or `keyfact` -> `bullets`
--> `end_card`. 2-4 s per scene, max ~6 words per bullet. Put citations in `sources` (author, journal,
-year) timed to the scene they support. For health or medical topics:
-- describe what it is and where it is **"studied in"** / "researched for"; never say it treats, cures,
-  prevents, reverses or is safe/effective;
+**explainer.** `cover` (the question) -> `definition` -> `diagram` or `keyfact` -> `bullets` ->
+`end_card`. 4-8 beats per scene, at most ~6 words per bullet. Put citations in `sources` (author,
+journal, year) timed to the scene they support. For health or medical topics:
+- describe what it is and where it is "studied in" / "researched for"; never say it treats, cures,
+  prevents, reverses or is safe or effective;
 - no doses, routes, protocols, sourcing or before/after claims;
-- always end on `end_card` with "For learning only." / "Not medical advice." (the defaults).
-For finance use "Illustrative data · not financial advice" in a `lower_third`.
+- end on `end_card` with "For learning only." / "Not medical advice." (the defaults).
 
-**promo** - `device` hero (headline = product name, 2-3 callouts with icons, `screen: "shot.png"` for
-a real screenshot placed in the project dir, else procedural UI from `ui`) -> `features` (4 items,
-2-3 words title + short line) -> `cta` (verb-first button) -> `logo` (wordmark + tagline + url).
+For finance, add "Illustrative data - not financial advice" in a `lower_third`.
 
-**data** - Lead with the single most striking number (`counter`), then 2-3 charts, end on `ticker`
-or `stat_grid`. Pass real numbers from the brief/data source; if numbers are illustrative say so in a
-`lower_third`. `line` takes `series` as a list of numbers or a seeded random walk
-`{"seed","n","start","drift","vol"}`; `candles` takes `ohlc` (list of `[o,h,l,c]`) or the same
-random-walk keys.
+**promo.** `device` hero (headline = product name, 2-3 callouts, `screen: "shot.png"` for a real
+screenshot in the project directory, else a procedural UI) -> `features` (4 items, 2-3 word title
+plus a short line) -> `cta` (verb-first button) -> `brand` or `logo` (wordmark, tagline, url).
 
-**social** - `quote` (<= 20 words, author + role) and/or `karaoke` with the spoken line; set `per`
-(seconds per word, 0.28-0.4), `"timing": "beat"`, or exact per-word timings
-`"words": [{"w": "Make", "t": 0.0}, ...]` (seconds from scene start, e.g. from a transcript);
-list 2-3 `emphasis` words.
+**data.** Lead with the single most striking number (`counter`), then 2-3 charts, end on `ticker` or
+`stat_grid`. Use real numbers from the brief; if they are illustrative, say so in a `lower_third`.
+`line` takes `series` (numbers) or a seeded random walk `{"seed", "n", "start", "drift", "vol"}`;
+`candles` takes `ohlc` (`[o, h, l, c]` rows) or the same keys.
 
-## Commands
+**social.** `hook` -> `quote` (at most 20 words, author and role) and/or `karaoke` with the spoken
+line (`"timing": "beat"`, or per-word `"words": [{"w": "Make", "t": 0.0}, ...]` from a transcript,
+2-3 `emphasis` words) -> `follow`.
 
-```
-bin/kstudio modes                         # list modes
-bin/kstudio scenes [type] [-v]            # scene types and parameters
-bin/kstudio new <mode> <dir> [--force]    # start from the mode's example
-bin/kstudio info <dir> [--json]           # validate + resolved timeline
-bin/kstudio preview <dir> [--at 1.2,3.4] [--preset reel] [--scale 0.5] [--quality draft]
-bin/kstudio render <dir> [-o out.mp4] [--preset reel|landscape|square|portrait] [--fps 30|60]
-               [--quality draft|standard|high] [--4k] [--workers auto|N] [--fresh] [--no-audit] [-q]
-bin/kstudio audit <video.mp4> [--mode explainer] [--min-motion 0.6] [--max-hold 2] [--json]
-bin/kstudio mix <dir> -o mix.wav          # soundtrack only
-bin/kstudio beats <track.mp3>             # tempo + beat grid of a music file
-bin/kstudio sfx <dir>                     # export the synthesized SFX kit as WAVs
-```
+## Output options
 
-Presets: `reel`/`story` 1080x1920 (9:16), `landscape`/`youtube` 1920x1080, `square` 1080x1080,
-`portrait` 1080x1350. `--4k` doubles both sides. `--quality draft` is ~3x faster for checks.
+Presets: `reel` / `story` 1080x1920, `landscape` / `youtube` 1920x1080, `square` 1080x1080,
+`portrait` 1080x1350; `k4` / `--4k` doubles both sides. Frame rates 24, 25, 30, 50, 60. Quality
+`draft` (no motion blur, for checks), `standard` (default), `high`.
 
-## Performance and limits
+### Audit input limits
 
-- ~1.5-2x real time per second of 1080x1920@30 on 8 CPUs at `standard` (12 s video -> ~25 s).
-  `--workers auto` sizes workers to free RAM (~550 MB each at 1080x1920) and CPU count.
-- Pure 2D motion graphics: no live footage generation, no lip-sync, no TTS voice-over.
-  For a user's own footage or photos use the `image` scene (Ken Burns) or composite afterwards.
-- Text must be supplied; the engine does not write copy. You (the agent) write it from the brief.
+Audits use **`reference-1080-v2`**. Coded short edge must be >=144 px, long edge <=4096 px, and
+total pixels <=9,000,000. The even analysis grid must have axes 16..512 px, at most 65,536 pixels,
+and fit within the source without upscaling. Tiny or extreme-aspect inputs that violate these
+limits fail with `AUDIT_FAILED` / `unsupported_geometry` (CLI exit 5), not a successful skip.
+Explicit non-unit SAR or nonidentity rotation, including display-matrix rotation, fails with
+`unsupported_display_geometry`; absent/N/A/0:1 SAR is treated as unspecified square pixels.
+A detected decoder failure, partial final frame or fewer than three frames gives `invalid_decode`.
+
+The denoising equation, motion gate 1.75, raw still threshold 0.6, black threshold 10.0 and mode
+thresholds are unchanged. Supported short-edge 1080/default master grids preserve the prior basis;
+non-1080 sampled motion, hold and black-frame metrics can change. Record the report's basis and
+analysis size; keep historical reports. This is not universal perceptual calibration. The bounds
+limit per-frame analysis geometry only, not total runtime/memory for arbitrary video duration.
+Meeting these limits does not waive other quality checks or replace visual/readability/audio review.
+Full policy: `docs/CLI.md`, “Audit input policy and measurement basis”, in the repository.
+
+## Troubleshooting
+
+| symptom | fix |
+|---|---|
+| `MISSING_TOOL` / ffmpeg not found | install ffmpeg with libx264 (`brew install ffmpeg`, `apt install ffmpeg`) |
+| `SPEC_PARSE` | the spec must be one JSON object; check quotes and brackets |
+| `SPEC_INVALID` with a `path` | fix that field; the `hint` names the allowed values |
+| warning "not a whole number of beats" | write the length as `"4b"` or set `"snap": true` |
+| text clipped or overlapping in the contact sheet | shorter words, fewer lines, or a smaller `size` / `weight` |
+| audit fails `motion_ratio` or `longest_hold` | shorter scenes, a busier transition, an extra scene |
+| audit fails `loudness` / `true_peak` | re-render; with your own track, lower `music.gain` |
+| render slow or memory-bound | `quality: "draft"` while iterating; fewer `workers` |
+| MCP client times out on `render` | raise its tool timeout to 15 minutes (a 15 s reel renders in a few minutes) or use `preview` first |
+| render interrupted | run it again: finished chunks resume |
+
+## Limits
+
+- A 15-second 1080x1920 / 30 fps reel at `standard` takes about 1-3 minutes on a 10-core laptop
+  (4-13x the video length; more on a busy machine). `draft` is faster; use `preview` while iterating.
+- Pure 2D/2.5D motion graphics: no footage generation, no lip-sync, no voice-over. Footage you
+  supply plays in a `clip` scene.
+- Optional character swap: `kstudio swap` / the MCP tool `swap` / a clip's `source.swap` send a video
+  and a character image to a ComfyUI server you run on an NVIDIA GPU with Openjutsu's workflows
+  (`KSTUDIO_COMFY_URL`). Without one they return `BACKEND_UNREACHABLE` (exit 7) and a clip plays the
+  input video. Nothing else needs it. See `docs/SWAP.md`.
 - Do not post or upload results anywhere without the user's explicit approval.

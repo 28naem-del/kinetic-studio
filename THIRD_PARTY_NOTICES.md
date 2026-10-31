@@ -1,41 +1,66 @@
 # Third-party notices
 
-Kinetic Studio's own code is original (clean-room) work under the MIT licence (see `LICENSE`).
-It contains no code copied from other video-template products. It uses or bundles the following
-third-party components.
+This file lists third-party code and fonts included in Kinetic Studio, with
+attribution and licence information. Kinetic Studio's own licence is in
+`LICENSE`.
 
-## Bundled: fonts (SIL Open Font License 1.1)
+## Fonts
 
-The full licence text for each family ships next to the font in `kstudio/assets/fonts/OFL-<Family>.txt`.
-Under the OFL the fonts may be bundled, embedded and redistributed with software, including
-commercial software, but may not be sold on their own. Reserved Font Names apply to modified versions.
+All bundled fonts live in `kstudio/assets/fonts/` and are licensed under the
+SIL Open Font License 1.1 (SPDX: `OFL-1.1`). The full licence text for each
+family ships next to the font file.
 
-| Font | Authors | File | Licence |
-|---|---|---|---|
-| Archivo (variable) | Copyright 2020 The Archivo Project Authors (github.com/Omnibus-Type/Archivo) | `Archivo.ttf` | OFL-1.1 |
-| Inter (variable) | Copyright 2016 The Inter Project Authors (github.com/rsms/inter) | `Inter.ttf` | OFL-1.1 |
-| Fraunces (variable) | Copyright 2020 The Fraunces Project Authors (github.com/undercasetype/Fraunces) | `Fraunces.ttf` | OFL-1.1 |
-| JetBrains Mono (variable) | Copyright 2020 The JetBrains Mono Project Authors (github.com/JetBrains/JetBrainsMono) | `JetBrainsMono.ttf` | OFL-1.1 |
-| Space Grotesk (variable) | Copyright 2020 The Space Grotesk Project Authors (github.com/floriankarsten/space-grotesk) | `SpaceGrotesk.ttf` | OFL-1.1 |
+| Family | File | Licence text | Copyright |
+| --- | --- | --- | --- |
+| Archivo | `Archivo.ttf` | `OFL-Archivo.txt` | Copyright 2020 The Archivo Project Authors (https://github.com/Omnibus-Type/Archivo) |
+| Fraunces | `Fraunces.ttf` | `OFL-Fraunces.txt` | Copyright 2020 The Fraunces Project Authors (github.com/undercasetype/Fraunces) |
+| Inter | `Inter.ttf` | `OFL-Inter.txt` | Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter) |
+| JetBrains Mono | `JetBrainsMono.ttf` | `OFL-JetBrainsMono.txt` | Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono) |
+| Space Grotesk | `SpaceGrotesk.ttf` | `OFL-SpaceGrotesk.txt` | Copyright 2020 The Space Grotesk Project Authors (https://github.com/floriankarsten/space-grotesk) |
 
-## Python dependencies (installed by the user, not bundled)
+## Code
 
-| Package | Licence |
-|---|---|
-| skia-python (and Google Skia) | BSD-3-Clause |
-| NumPy | BSD-3-Clause |
-| opencv-python-headless (OpenCV) | Apache-2.0 (OpenCV 4.5+); wheel bundles its own third-party notices |
-| pytest, ruff, mypy, pre-commit (dev only) | MIT |
+When adding code adapted from another project, add an entry here in this format:
 
-## External tool (not bundled)
+```
+### <name>
+- URL: <project or source URL>
+- Licence: <SPDX identifier, e.g. MIT>
+- Files affected: <paths in this repo>
+- Copyright: <copyright line as given by the original project>
+```
 
-**FFmpeg / ffprobe** are called as separate executables through the command line. They are not linked
-or distributed with this project. FFmpeg is LGPL-2.1+; builds with libx264 enabled (required for H.264
-output) are GPL-2.0+. The user installs FFmpeg separately and is responsible for complying with the
-licence of the build they use.
+### Openjutsu
+- URL: https://github.com/D3voz/openjutsu (workflows taken at commit 7fe118bb5a61fcfac0148e1bfea3dd29884dbf26)
+- Licence: MIT
+- Files affected: `kstudio/workflows/simple.api.json`, `kstudio/workflows/object.api.json` (the ComfyUI API
+  workflows, unchanged); `kstudio/swap.py` follows its approach of routing a video loader's soundtrack
+  through a silence-if-none node before submitting a workflow
+- Copyright: Copyright (c) 2026 D3voz
 
-## Audio
+The workflows run only on a ComfyUI server that the user sets up with Openjutsu's custom node packs and
+models; none of those are included or downloaded by Kinetic Studio. Licence text:
 
-All music beds and sound effects are synthesised procedurally at render time by this package's own
-code (`kstudio/audio`). No samples, loops or recordings are bundled. Audio the user supplies (`music.file`)
-remains the user's responsibility.
+```
+MIT License
+
+Copyright (c) 2026 D3voz
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

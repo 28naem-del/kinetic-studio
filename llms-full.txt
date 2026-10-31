@@ -1,0 +1,1153 @@
+# Kinetic Studio
+
+> Local, programmatic motion-graphics video engine: a short JSON spec (scenes on a beat grid plus timeline markers) becomes a finished, beat-synced MP4 with procedural music and sound effects, mixed to -14 LUFS and automatically audited. Five modes: kinetic type, explainer, product promo, data story, social quote or karaoke. The core renderer runs on the CPU with Python, Skia and ffmpeg without API keys, accounts or network calls after installation. Optional swap uploads chosen video and character inputs to a configured ComfyUI backend; source.swap may trigger this during rendering when configured. Enable it only for inputs you agree to share with that server. MIT licence.
+
+Agents use it through an MCP server (stdio or streamable HTTP), function-calling schemas, a one-shot JSON command line or plain Python. The server needs no extra dependencies:
+
+- MCP command: `uvx --from git+https://github.com/28naem-del/kinetic-studio kstudio-mcp` (from a clone: `python -m kstudio.mcp_server`; HTTP: add `--http 8765`, endpoint `http://127.0.0.1:8765/mcp`)
+- Nine advertised tools (eight core plus optional-backend swap): `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (progress notifications), `audit`, `swap`. Each returns one JSON object with an `ok` field; failures carry `error: {code, message, hint}`.
+- Workflow: get_schema(mode) -> write the spec from the example -> validate_spec and fix every error -> preview and look at the contact sheet -> render -> report output path and audit verdict.
+- Write every scene length in beats (`"4b"`, `"1/2b"`, `"1bar"`); times can name markers (`"drop-2b"`).
+
+## Docs
+
+- [Agent skill](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/SKILL.md): workflow, beat units, the spec contract, error codes, per-mode writing rules and troubleshooting
+- [Scene reference](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/SCENES.md): all 32 scene types with parameters and defaults, shared keys, transitions
+- [Command line](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/CLI.md): commands, --json output shapes, exit codes
+- [Footage and swap](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/SWAP.md): the `clip` scene (your video under titles, any mode) and the optional ComfyUI character swap (`kstudio swap`, exit 7 without a backend)
+- [Architecture](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/ARCHITECTURE.md): modules and the render, audio and audit pipeline
+- [README](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/README.md): overview, install, command line, demos
+
+## Tools
+
+- [Tool definitions](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/tools/README.md): how the tool files are generated and how to dispatch calls
+- [MCP tool list](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/tools/mcp-tools.json): the tools/list result with input and output schemas
+- [Function-calling tools](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/tools/functions.json): strict function schemas named kstudio_<tool>
+- [Tool manifest](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/tools/tools.schema.json): plain JSON manifest with invocation details
+
+## Quickstarts
+
+- [Quickstart index](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/README.md): 15 quickstart pages for agent frameworks, Python and shell, alphabetical
+- [Plain Python](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/python.md): in-process calls, function calling, raw MCP
+- [Shell and curl](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/docs/quickstarts/shell.md): one-shot JSON, raw stdio, HTTP
+
+## Examples
+
+- [Kinetic example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/kinetic/spec.json): beat-synced type teaser
+- [Explainer example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/explainer/spec.json): definition, diagram, key facts, end card
+- [Promo example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/promo/spec.json): device hero, features, call to action, brand
+- [Data example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/data/spec.json): counter, line, candles, bars, stat grid, ticker
+- [Social example spec](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/examples/social/spec.json): hook, quote, karaoke, follow
+
+## Optional
+
+- [Full text](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/llms-full.txt): this file plus the skill, tool docs, scene reference and architecture in one file
+- [Changelog](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/CHANGELOG.md)
+- [Third-party notices](https://raw.githubusercontent.com/28naem-del/kinetic-studio/main/THIRD_PARTY_NOTICES.md): fonts and licences
+
+---
+
+<!-- SKILL.md -->
+
+---
+name: kinetic-studio
+description: Turn a short brief into a finished, beat-synced motion-graphics video (MP4, 9:16 / 16:9 / 1:1 / 4:5, 24-60 fps, optional 4K) with procedural music and sound effects, mixed to -14 LUFS, and an automatic quality audit. Five modes - kinetic type teaser, explainer, product promo, data story, social quote or karaoke clip. Use when someone asks for a reel, short, teaser, explainer, promo, stats video or quote video and no camera footage is needed. The core renderer runs locally (Python, Skia, ffmpeg) without paid APIs, accounts or cloud calls; optional swap sends chosen video and character inputs to a configured ComfyUI backend, only for inputs you agree to share.
+license: MIT
+compatibility: Python 3.10+ and ffmpeg/ffprobe with libx264 on PATH. Works through MCP (stdio or HTTP), the command line or Python.
+metadata:
+  version: "0.2"
+  triggers: "make a reel, make a short, kinetic typography, animated text video, explainer video, product promo video, app launch video, stats video, data video, quote video, karaoke captions, motion graphics, beat-synced video"
+---
+
+# Kinetic Studio
+
+A local, programmatic video engine. You write a small JSON spec (scenes on a beat grid plus timeline
+markers); the engine renders it in parallel with motion blur and a film grade, scores it with
+procedural music and sound effects locked to the beat, mixes to -14 LUFS / -1 dBTP and audits the
+file. Same spec, same video: renders are deterministic and resumable.
+
+## When to use
+
+- Short vertical or landscape videos built from words, numbers, charts, UI mock-ups and logos:
+  teasers, announcements, explainers, product promos, KPI or market recaps, quotes, captions.
+- Anything that should cut on the beat of the music.
+
+Not for: generating live-action footage, faces or voices, lip-sync or text-to-speech. A user's own
+photo can go in an `image` scene and their own video in a `clip` scene (any mode: trimmed on the
+beat, with titles, captions or counters drawn over it in `over`). The engine does not write copy:
+you write the words from the brief.
+
+## 30-second path
+
+Pick one way in. All three run the same engine and return the same JSON.
+
+**MCP (any MCP-capable agent).** Register the server, then call its tools:
+
+```
+command: uvx
+args:    ["--from", "git+https://github.com/28naem-del/kinetic-studio", "kstudio-mcp"]
+```
+
+From a clone instead: `python -m kstudio.mcp_server` with the clone as working directory.
+Per-framework snippets: `docs/quickstarts/`.
+
+**Command line.**
+
+```
+kstudio new kinetic my-reel            # starter project from the mode's example
+kstudio validate my-reel               # errors with JSON Pointer paths and hints
+kstudio preview my-reel                # stills + contact_sheet.jpg in a few seconds
+kstudio render my-reel                 # my-reel/out/my-reel_reel.mp4 + .report.json
+```
+
+`kstudio --json <command>` prints exactly one JSON object; exit codes: 0 ok, 2 usage, 3 spec
+invalid, 4 render failed, 5 audit failed, 6 missing tool (`kstudio doctor` checks ffmpeg and the
+rest). `kinetic-studio` is the same command.
+
+**Function calling without MCP.** Load `docs/tools/functions.json` (or `tools.schema.json`) as
+your tool list and dispatch each call with
+`from kstudio.mcp_server import run_tool; run_tool(name, arguments_json)`.
+
+## Workflow (brief -> video)
+
+| step | MCP tool | command line |
+|---|---|---|
+| 1. see what exists | `list_modes`, `list_scenes` | `kstudio modes`, `kstudio scenes -v` |
+| 2. get the contract | `get_schema {mode}` (schema + example spec) | `kstudio schema --mode <m>`, `docs/SCENES.md` |
+| 3. start a project | `new_spec {mode, dir, spec_json?}` | `kstudio new <mode> <dir>` |
+| 4. check the spec | `validate_spec {spec_path}` | `kstudio validate <dir>` |
+| 5. look before rendering | `preview {spec_path}` (contact sheet image) | `kstudio preview <dir>` |
+| 6. render | `render {spec_path}` (progress notifications) | `kstudio render <dir>` |
+| 7. verify | `audit {video, mode}` (render already audits) | `kstudio audit <video> --mode <m>` |
+
+1. **Pick the mode** from the brief (table below). If unclear, default to `kinetic`.
+2. **Write the spec** from the mode's example: keep its structure, replace the words, numbers and
+   colours. 8-15 s for social, one idea per scene.
+3. **Validate** and fix every error (each has a JSON Pointer `path`, a `message` and a `hint`).
+   Fix warnings about off-grid lengths too.
+4. **Preview and look at the contact sheet**: text fits, nothing overlaps, the last frame is the
+   intended end card.
+5. **Render**, then report the output path, duration, audit verdict and any failed check. If motion
+   or hold checks fail, shorten holds, add a scene or use a busier transition; do not relax thresholds.
+
+Interrupted renders resume: run the same render again and finished 2-second chunks are reused
+(`fresh: true` / `--fresh` forces a clean render).
+
+## Beat units (the one rule that matters)
+
+Every time and length can be written in beats at the music tempo, and should be:
+
+| write | means |
+|---|---|
+| `"4b"`, `"1/2b"`, `"3/4b"` | 4 beats, half a beat, three quarters of a beat |
+| `"1bar"`, `"2bars"` | one bar (4 beats), two bars |
+| `"bar3"` | the start of bar 3 (1-based, like a DAW) |
+| `"drop"`, `"drop-2b"`, `"intro+1.25s"`, `"end-1b"` | a named marker or scene id, with offsets |
+| `1.5`, `"1.5s"`, `"250ms"` | seconds (avoid for scene lengths) |
+
+- Scene lengths: whole beats, ideally 2b, 4b or 8b. Cuts, transition windows and their sound
+  effects then land on the grid. Validation warns when a length is off the grid.
+- `"snap": true` in the spec (or `snap` on render) moves seconds-valued lengths and starts onto the
+  beat grid.
+- With your own music (`"music": {"file": "track.mp3"}`) the tempo and downbeat come from the file.
+
+## JSON contract
+
+**Spec** (comments and trailing commas allowed; full schema: `get_schema`):
+
+```jsonc
+{
+  "mode": "kinetic",                       // kinetic | explainer | promo | data | social
+  "handle": "@you",                        // small corner handle (optional)
+  "theme": "ink",                          // ink | lab | studio | terminal | warm, or {"base": "ink", "accent": "#ff3b30"}
+  "music": { "style": "drive", "bpm": 128 },  // drive | calm | bright | pulse | lofi | none, or {"file": "track.mp3"}
+  "transition": "whip",                    // default between scenes
+  "markers": [
+    { "kind": "section", "at": 0, "name": "intro", "energy": 1 },   // energy 0-3 drives music layers and camera
+    { "kind": "section", "at": "drop", "name": "drop", "energy": 3 },
+    { "kind": "sfx", "at": "drop-2b", "sound": "riser_short" },
+    { "kind": "hit", "at": "8b", "strength": 0.8 },
+    { "kind": "lower_third", "at": "1b", "dur": "4b", "tag": "Note", "text": "..." }
+  ],
+  "scenes": [
+    { "type": "slam", "id": "open", "words": ["STOP", "SCROLLING"], "dur": "4b" },
+    { "type": "stack", "lines": ["ONE IDEA", "PER", "BEAT"], "dur": "4b", "transition": "whip-left" },
+    { "type": "burst", "id": "drop", "text": "GO", "dur": "4b", "transition": "flash" }
+  ]
+}
+```
+
+Transitions (per scene, on the incoming one): `cut`, `flash`, `cross` (alias `fade`), `dissolve`,
+`whip`, `push`, `zoom`, `squash`, `wipe` (`rect`, `circle`, `diagonal`, `type`), `slice`, `split`,
+`match` (shared-element hand-off). Shorthand `"whip-left"`, `"wipe-circle"`, or a dict
+`{"kind": "wipe", "shape": "circle", "dur": "1b", "dir": "up", "on": "downbeat"}`.
+
+**Tool results.** Every tool returns one JSON object. `ok` says whether the thing asked about is good
+(spec valid, video rendered and audited). On failure there is `error: {code, message, hint}` and the
+MCP result has `isError: true`; validation problems are a normal result with `ok: false` and an
+`errors` list. Codes: `USAGE`, `MODE_UNKNOWN`, `DIR_NOT_EMPTY`, `FILE_NOT_FOUND`, `SPEC_INVALID`,
+`SPEC_NOT_FOUND`, `SPEC_PARSE`, `RENDER_FAILED`, `AUDIT_FAILED`, `MISSING_TOOL`, `INVALID_ARGUMENTS`, `INTERNAL_ERROR`.
+
+## Modes
+
+| mode | use for | look / sound | example scenes |
+|---|---|---|---|
+| `kinetic` | hype teasers, announcements, hooks | ink: black, bone, signal red; whips; `drive` 128 BPM | `slam`, `stack`, `marquee`, `type3d`, `scramble`, `countdown`, `burst` |
+| `explainer` | education, "what is X" | lab: editorial paper, navy, cobalt; crosses; `calm` 84 BPM | `cover`, `definition`, `diagram`, `bullets`, `keyfact`, `end_card` |
+| `promo` | app and product launches | studio: violet gradient; pushes; `bright` 112 BPM | `device`, `features`, `cta`, `brand`, `logo`, `image` |
+| `data` | market, crypto, KPI stories | terminal: green up, red down; cuts; `pulse` 120 BPM | `counter`, `line`, `candles`, `bars`, `stat_grid`, `ticker` |
+| `social` | quotes, tips, spoken-line captions | warm: espresso, amber; `lofi` 86 BPM | `hook`, `quote`, `karaoke`, `follow`, `text` |
+
+Any scene works in any mode; the mode only sets theme, music, camera feel, default transition and
+audit thresholds. Parameters per scene: `list_scenes {type}` or `docs/SCENES.md`.
+
+## Brief -> spec rules per mode
+
+**kinetic.** Hook in the first 2 beats (`slam`, 2-4 words). One idea per scene, 2-4 words per line;
+capitals read best. Build energy with sections 1 -> 2 -> 3, put `riser_short` 2 beats before the
+drop, end on `burst` or `logo`.
+
+**explainer.** `cover` (the question) -> `definition` -> `diagram` or `keyfact` -> `bullets` ->
+`end_card`. 4-8 beats per scene, at most ~6 words per bullet. Put citations in `sources` (author,
+journal, year) timed to the scene they support. For health or medical topics:
+- describe what it is and where it is "studied in" / "researched for"; never say it treats, cures,
+  prevents, reverses or is safe or effective;
+- no doses, routes, protocols, sourcing or before/after claims;
+- end on `end_card` with "For learning only." / "Not medical advice." (the defaults).
+
+For finance, add "Illustrative data - not financial advice" in a `lower_third`.
+
+**promo.** `device` hero (headline = product name, 2-3 callouts, `screen: "shot.png"` for a real
+screenshot in the project directory, else a procedural UI) -> `features` (4 items, 2-3 word title
+plus a short line) -> `cta` (verb-first button) -> `brand` or `logo` (wordmark, tagline, url).
+
+**data.** Lead with the single most striking number (`counter`), then 2-3 charts, end on `ticker` or
+`stat_grid`. Use real numbers from the brief; if they are illustrative, say so in a `lower_third`.
+`line` takes `series` (numbers) or a seeded random walk `{"seed", "n", "start", "drift", "vol"}`;
+`candles` takes `ohlc` (`[o, h, l, c]` rows) or the same keys.
+
+**social.** `hook` -> `quote` (at most 20 words, author and role) and/or `karaoke` with the spoken
+line (`"timing": "beat"`, or per-word `"words": [{"w": "Make", "t": 0.0}, ...]` from a transcript,
+2-3 `emphasis` words) -> `follow`.
+
+## Output options
+
+Presets: `reel` / `story` 1080x1920, `landscape` / `youtube` 1920x1080, `square` 1080x1080,
+`portrait` 1080x1350; `k4` / `--4k` doubles both sides. Frame rates 24, 25, 30, 50, 60. Quality
+`draft` (no motion blur, for checks), `standard` (default), `high`.
+
+### Audit input limits
+
+Audits use **`reference-1080-v2`**. Coded short edge must be >=144 px, long edge <=4096 px, and
+total pixels <=9,000,000. The even analysis grid must have axes 16..512 px, at most 65,536 pixels,
+and fit within the source without upscaling. Tiny or extreme-aspect inputs that violate these
+limits fail with `AUDIT_FAILED` / `unsupported_geometry` (CLI exit 5), not a successful skip.
+Explicit non-unit SAR or nonidentity rotation, including display-matrix rotation, fails with
+`unsupported_display_geometry`; absent/N/A/0:1 SAR is treated as unspecified square pixels.
+A detected decoder failure, partial final frame or fewer than three frames gives `invalid_decode`.
+
+The denoising equation, motion gate 1.75, raw still threshold 0.6, black threshold 10.0 and mode
+thresholds are unchanged. Supported short-edge 1080/default master grids preserve the prior basis;
+non-1080 sampled motion, hold and black-frame metrics can change. Record the report's basis and
+analysis size; keep historical reports. This is not universal perceptual calibration. The bounds
+limit per-frame analysis geometry only, not total runtime/memory for arbitrary video duration.
+Meeting these limits does not waive other quality checks or replace visual/readability/audio review.
+Full policy: `docs/CLI.md`, “Audit input policy and measurement basis”, in the repository.
+
+## Troubleshooting
+
+| symptom | fix |
+|---|---|
+| `MISSING_TOOL` / ffmpeg not found | install ffmpeg with libx264 (`brew install ffmpeg`, `apt install ffmpeg`) |
+| `SPEC_PARSE` | the spec must be one JSON object; check quotes and brackets |
+| `SPEC_INVALID` with a `path` | fix that field; the `hint` names the allowed values |
+| warning "not a whole number of beats" | write the length as `"4b"` or set `"snap": true` |
+| text clipped or overlapping in the contact sheet | shorter words, fewer lines, or a smaller `size` / `weight` |
+| audit fails `motion_ratio` or `longest_hold` | shorter scenes, a busier transition, an extra scene |
+| audit fails `loudness` / `true_peak` | re-render; with your own track, lower `music.gain` |
+| render slow or memory-bound | `quality: "draft"` while iterating; fewer `workers` |
+| MCP client times out on `render` | raise its tool timeout to 15 minutes (a 15 s reel renders in a few minutes) or use `preview` first |
+| render interrupted | run it again: finished chunks resume |
+
+## Limits
+
+- A 15-second 1080x1920 / 30 fps reel at `standard` takes about 1-3 minutes on a 10-core laptop
+  (4-13x the video length; more on a busy machine). `draft` is faster; use `preview` while iterating.
+- Pure 2D/2.5D motion graphics: no footage generation, no lip-sync, no voice-over. Footage you
+  supply plays in a `clip` scene.
+- Optional character swap: `kstudio swap` / the MCP tool `swap` / a clip's `source.swap` send a video
+  and a character image to a ComfyUI server you run on an NVIDIA GPU with Openjutsu's workflows
+  (`KSTUDIO_COMFY_URL`). Without one they return `BACKEND_UNREACHABLE` (exit 7) and a clip plays the
+  input video. Nothing else needs it. See `docs/SWAP.md`.
+- Do not post or upload results anywhere without the user's explicit approval.
+
+---
+
+<!-- docs/tools/README.md -->
+
+# Tool definitions
+
+Kinetic Studio's nine advertised tools (eight core plus optional-backend swap), described once in `kstudio/mcp_server.py` (`TOOLS`) and exported here
+for clients that do not speak MCP. Do not edit the JSON files by hand.
+
+| file | for |
+|---|---|
+| `mcp-tools.json` | the MCP `tools/list` result, exactly as the server returns it |
+| `functions.json` | function tools in the flat form `{"type": "function", "name", "description", "parameters", "strict": true}` |
+| `functions-chat.json` | the same tools in the nested form `{"type": "function", "function": {...}}` used by chat-completions style APIs |
+| `tools.schema.json` | a plain manifest: name, description, input and output JSON Schema, hints and the ways to invoke the server |
+| `generate.py` | writes the four files from `TOOLS` and `/llms-full.txt` from the docs; `--check` fails when any is out of date; `--scenes` rewrites `docs/SCENES.md` from the scene registry |
+
+```bash
+python docs/tools/generate.py           # regenerate after changing a tool or the skill and docs
+python docs/tools/generate.py --check   # what the test suite runs (tests/test_mcp.py)
+```
+
+## Names and arguments
+
+Function-calling exports name each tool `kstudio_<tool>` (for example `kstudio_render`) so they do
+not collide with other tools; MCP uses the bare names. The dispatcher accepts both.
+
+The function schemas are in strict form: every property is listed as required and the optional ones
+accept `null`. The server treats `null` as "not given", so a model can fill every field.
+
+## Dispatching calls
+
+```python
+import json
+from kstudio.mcp_server import run_tool
+
+tools = json.load(open("docs/tools/functions.json"))   # pass to your model API as its tool list
+
+def on_tool_call(name: str, arguments: str) -> str:
+    """name: "kstudio_validate_spec" or "validate_spec"; arguments: the JSON text from the model."""
+    return json.dumps(run_tool(name, arguments))           # one JSON object with an "ok" field
+```
+
+From a shell or another language: `python -m kstudio.mcp_server --call <tool> '<json>'` prints the
+same JSON object on stdout and exits 0 when `ok` is true.
+
+## The tools
+
+| tool | does | writes files |
+|---|---|---|
+| `list_modes` | modes with theme, music, transition, example scenes; presets, quality, frame rates, time units | no |
+| `list_scenes` | the scene types, or one type's parameters | no |
+| `get_schema` | the spec JSON Schema (optionally only some scene types), mode defaults and the mode's example spec | no |
+| `validate_spec` | checks a spec file or inline JSON; errors carry a JSON Pointer path, message and hint | no |
+| `new_spec` | starts a project directory from a mode's example, or from your spec JSON | yes |
+| `preview` | renders stills and a contact sheet (returned as an image) in seconds | yes |
+| `render` | renders, mixes and audits the MP4, with progress notifications | yes |
+| `audit` | re-checks a supported MP4 (motion, holds, loudness, true peak, frame count) | yes (report) |
+| `swap` | optional Openjutsu swap via a configured ComfyUI URL; no local GPU required | yes (video) |
+
+## Audit support policy
+
+The `audit` / `kstudio_audit` tool uses the same
+[audit input policy and measurement basis](../CLI.md#audit-input-policy-and-measurement-basis) as
+the CLI: `reference-1080-v2`, bounded no-upscale sampling, and explicit rejection of unsupported
+geometry or display metadata. Failures expose `error.code: AUDIT_FAILED` with a reason such as
+`unsupported_geometry`, `unsupported_display_geometry` or `invalid_decode`; they are not successful
+waivers. Successful measurements report `motion.motion_analysis_size`, `motion.motion_basis` and
+`motion.black_basis`. Non1080 sampled metrics may differ from historical reports even though the
+thresholds are unchanged. These are per-frame analysis bounds, not global duration/resource limits.
+
+---
+
+<!-- docs/quickstarts/README.md -->
+
+# Quickstarts
+
+Kinetic Studio is a local MCP server, a JSON command line and a set of function-calling schemas, so
+it plugs into any agent. There are 15 quickstart pages below. Every quickstart was checked against
+that framework's current documentation on 2026-10-30; each page cites its reference URL.
+
+The one line every MCP client needs:
+
+```
+uvx --from git+https://github.com/28naem-del/kinetic-studio kstudio-mcp
+```
+
+(from a clone: `python -m kstudio.mcp_server` with the clone on `PYTHONPATH`; HTTP instead of stdio:
+add `--http 8765` and connect to `http://127.0.0.1:8765/mcp`).
+
+## Frameworks (alphabetical)
+
+- [AutoGen and Microsoft Agent Framework](autogen.md): Python, stdio
+- [Claude Code](claude-code.md): CLI, stdio
+- [Cline](cline.md): editor extension, stdio
+- [Codex CLI](codex-cli.md): CLI, stdio
+- [Continue](continue.md): editor extension, stdio
+- [CrewAI (crew-style multi-agent)](crewai.md): Python, stdio
+- [Cursor](cursor.md): editor, stdio
+- [Dify](dify.md): platform, HTTP
+- [Gemini CLI](gemini-cli.md): CLI, stdio
+- [LangChain and LangGraph](langchain.md): Python, stdio
+- [n8n](n8n.md): workflow automation, HTTP or Execute Command
+- [OpenHands](openhands.md): CLI and web app, stdio or HTTP
+- [Plain Python](python.md): no framework: in-process, function calling or raw MCP
+- [Plain shell and curl](shell.md): one-shot JSON, raw stdio, curl over HTTP
+- [Windsurf](windsurf.md): editor, stdio
+
+## What every client gets
+
+Nine tools are advertised: eight core tools (`list_modes`, `list_scenes`, `get_schema`,
+`validate_spec`, `new_spec`, `preview`, `render` with progress notifications, and `audit`) plus
+`swap`, which requires an optional configured ComfyUI backend. Swap uploads the chosen video and
+character image to that server; see [the swap data boundary](../SWAP.md) before enabling it.
+Each tool takes a JSON Schema-described object and returns one JSON object with an `ok` field.
+Definitions for clients without MCP live in `docs/tools/`.
+
+Both MCP protocol eras are served: the stateless 2026-07-28 revision (`server/discover`) and the
+`initialize` handshake of 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05.
+
+## The skill
+
+`skills/kinetic-studio/SKILL.md` is a portable skill (frontmatter plus instructions): the workflow,
+beat-unit rules, the spec contract and per-mode writing rules. Copy the `skills/kinetic-studio/`
+folder into whatever skills directory your agent reads (for example `.agents/skills/`), or paste the
+file into the system prompt of agents without skill support.
+
+## Timeouts
+
+A 15-second 1080x1920 reel takes about 1-3 minutes at standard quality on a 10-core laptop (more
+on a busy machine); the first start through uvx downloads
+the engine. Raise the client's startup and tool timeouts where the quickstart says so, and use
+`preview` (seconds) while iterating.
+
+---
+
+<!-- docs/SCENES.md -->
+
+# Scene reference
+
+32 scene types. Any scene works in any mode; the mode only sets theme, music, camera feel,
+default transition and audit thresholds. The same information is live from the `list_scenes` MCP tool
+and `kstudio scenes -v`; the full JSON Schema comes from `get_schema`. Regenerate this page with
+`python docs/tools/generate.py --scenes`.
+
+## Times and lengths
+
+Every time or length takes seconds (`1.5`, `"1.5s"`, `"250ms"`) or beats at the music tempo:
+`"4b"`, `"1/2b"`, `"1bar"`, `"bar3"` (start of bar 3), or a marker or scene id with an offset
+(`"drop-2b"`, `"intro+1.25s"`, `"end-1b"`). Write scene lengths in whole beats.
+
+## Keys every scene accepts
+
+| key | meaning |
+|---|---|
+| `type` | the scene type (below) |
+| `id` | a name other times can refer to (`"drop"`, `"drop-2b"`) |
+| `dur` | length, ideally whole beats (`"4b"`) |
+| `at` | start time; default: right after the previous scene |
+| `transition` | transition into this scene (see below); default: the mode's |
+| `transition_dur` | transition window length (`"1/2b"`) |
+| `transition_sfx` | `false` silences the transition sound (pick another with `"sfx"` in a transition dict) |
+| `ground` | backdrop colour: a theme colour name (default `bg`) or a hex colour |
+| `ground_style` | `solid`, `gradient`, `grid`, `dots`, `blobs`, `paper`, `mesh` |
+| `camera` | overrides of the mode camera: `push`, `carry`, `drift`, `drift_hz`, `energy`, `roll`, `truck`, `yaw`, `pitch`, `ground_depth`, `bump`, `shake`, `dist` |
+
+## Transitions
+
+Set on the incoming scene: a name, a shorthand (`"whip-left"`, `"wipe-circle"`) or a dict such as
+`{"kind": "wipe", "shape": "circle", "dur": "1b", "dir": "up"}`. Directions: `left`, `right`, `up`, `down`. Wipe shapes: `rect`, `circle`, `diagonal`, `type`.
+
+| kind | window (beats) | sound at the cut |
+|---|---|---|
+| `cut` | 0 | - |
+| `flash` | 0 | hit |
+| `cross` | 1 | - |
+| `fade` (alias of `cross`) | 1 | - |
+| `dissolve` | 1 | - |
+| `whip` | 0.5 | whoosh |
+| `push` | 0.75 | swish |
+| `zoom` | 0.75 | whoosh |
+| `squash` | 0.5 | swish |
+| `wipe` | 1 | swish |
+| `slice` | 1 | swish |
+| `split` | 0.75 | swish |
+| `match` | 0 | - |
+
+## Kinetic type
+
+### `burst`
+
+The drop: a word zooms from deep space with speed lines, rings and a flash.
+
+| key | default |
+|---|---|
+| `text` | `"NOW"` |
+| `weight` | `900` |
+| `width` | `125` |
+| `lines` | `70` |
+| `color` | `"accent"` |
+| `land` | `"1/3b"` |
+| `rows` | `3` |
+| `row_stagger` | `"1/8b"` |
+
+### `countdown`
+
+Big numbers counting down on the beat (3, 2, 1) with a ring sweep.
+
+| key | default |
+|---|---|
+| `from` | `3` |
+| `per` | `"1b"` |
+| `label` | `""` |
+
+### `marquee`
+
+Tilted rows of repeating type scrolling in opposite directions, centre row hero.
+
+| key | default |
+|---|---|
+| `text` | `"MOTION"` |
+| `rows` | `7` |
+| `tilt` | `-8` |
+| `speed` | `420` |
+| `hero` | `true` |
+| `weight` | `900` |
+| `speed_beats` | `null` |
+
+### `scramble`
+
+Glyph scramble that resolves letter by letter (code / reveal feel).
+
+| key | default |
+|---|---|
+| `text` | `"DECRYPTED"` |
+| `label` | `""` |
+| `stagger` | `"1/8b"` |
+| `first` | `"1b"` |
+| `role` | `"mono"` |
+| `weight` | `800` |
+| `caret` | `true` |
+| `lines` | `[]` |
+| `rows` | `5` |
+
+### `slam`
+
+One word per beat, punched in at full width; grounds can flip per word.
+
+| key | default |
+|---|---|
+| `per` | `"1b"` |
+| `flip` | `true` |
+| `grounds` | `["bg", "accent", "paper"]` |
+| `style` | `"fill"` |
+| `accent_words` | `[]` |
+| `weight` | `900` |
+| `width` | `112` |
+| `echo` | `true` |
+| `sfx` | `"hit"` |
+| `first_sfx` | `"impact"` |
+| `land` | `"1/3b"` |
+| `rows` | `4` |
+| `rows_above` | `2` |
+| `row_stagger` | `"1/8b"` |
+
+### `stack`
+
+Lines that each fill the width, arriving one per `per` (default 1 beat).
+
+| key | default |
+|---|---|
+| `lines` | `["MAKE", "IT", "MOVE"]` |
+| `per` | `"1b"` |
+| `accent_last` | `true` |
+| `weight` | `900` |
+| `outline` | `[]` |
+| `align` | `"center"` |
+| `sfx` | `"whoosh"` |
+| `gap` | `0.06` |
+| `land` | `"1/2b"` |
+| `ghost` | `true` |
+| `pump` | `true` |
+| `width` | `118` |
+
+### `type3d`
+
+Extruded 3D type: swings in flat, then extrudes on the `impact` beat.
+
+| key | default |
+|---|---|
+| `text` | `"3D"` |
+| `depth` | `18` |
+| `weight` | `900` |
+| `width` | `110` |
+| `swing` | `75` |
+| `sub` | `""` |
+| `color` | `"ink"` |
+| `side` | `"accent"` |
+| `side_luma` | `0.55` |
+| `extrude` | `0.5` |
+| `impact` | `"1b"` |
+| `rows` | `4` |
+| `row_stagger` | `"1/8b"` |
+| `sfx` | `"whoosh_big"` |
+| `impact_sfx` | `"impact"` |
+| `y` | `0.42` |
+
+
+## Explainer
+
+### `bullets`
+
+Numbered list with large display numerals (headline 168): the heading (title 126) on the anchor and the list's rules and ghosted numerals on beat 0, then one item per `stagger` (default 1b) from `first` (default 1b) with a tick: its numeral and accent rule come in, its text rises, and the previous item steps back to muted. Rows share the anchor -> bottom safe line. Items are strings or {text, detail, icon}; numbered false sets check marks.
+
+| key | default |
+|---|---|
+| `index` | `""` |
+| `kicker` | `""` |
+| `heading` | `""` |
+| `items` | `[]` |
+| `stagger` | `"1b"` |
+| `first` | `"1b"` |
+| `numbered` | `true` |
+| `page` | `""` |
+
+### `cover`
+
+Explainer cover: running head, a 168 px headline on the anchor (visible from frame 0: lines rise together over half a beat) and the standfirst rule on beat 0, one word of the headline on the accent highlighter on beat 1, the standfirst on the bottom safe line on beat 2.
+
+| key | default |
+|---|---|
+| `index` | `"01"` |
+| `kicker` | `""` |
+| `title` | `"Title"` |
+| `accent` | `""` |
+| `subtitle` | `""` |
+| `sfx` | `"tick"` |
+| `page` | `""` |
+
+### `definition`
+
+Dictionary entry on the anchor. Beat 0: the term in display 224 with the page rules. Beat 1: the accent highlighter behind the term (published as "term" for a match cut), pronunciation / part of speech in mono, the definition in body 53 and the optional `note`. Beats 2, 3, ...: one figure of `stats` per beat on the bottom safe line; numeric figures after the first count up from the first one (a slow miss reads slow).
+
+| key | default |
+|---|---|
+| `index` | `""` |
+| `kicker` | `""` |
+| `term` | `"Term"` |
+| `phonetic` | `""` |
+| `pos` | `"noun"` |
+| `definition` | `""` |
+| `note` | `""` |
+| `stats` | `[]` |
+| `highlight` | `true` |
+| `page` | `""` |
+
+### `diagram`
+
+Labelled diagram that builds on the beat: nodes every `stagger` (default 1/2b), each edge drawn on the off-beat 16th before the node it lands on, callouts on the following whole beats; a tick on every entry. The heading sits in the running-head band and the figure fills the anchor -> bottom safe line. The first node takes over a published "term" (match cut). Layouts: ladder (bars, default for portrait explainer specs), chain, radial, manual.
+
+| key | default |
+|---|---|
+| `index` | `""` |
+| `kicker` | `""` |
+| `heading` | `""` |
+| `nodes` | `[]` |
+| `edges` | `null` |
+| `layout` | `"chain"` |
+| `callouts` | `[]` |
+| `stagger` | `"1/2b"` |
+| `first` | `0.0` |
+| `node_r` | `0` |
+| `caption` | `""` |
+| `page` | `""` |
+
+### `keyfact`
+
+One big figure or short phrase, flush left on the anchor (display role, scaled up to fill the content width), a title-size label on beat 1 and a body detail on beat 2. The value takes over a published "term" when it follows a match cut.
+
+| key | default |
+|---|---|
+| `index` | `""` |
+| `kicker` | `""` |
+| `value` | `"4"` |
+| `label` | `""` |
+| `detail` | `""` |
+| `color` | `"accent"` |
+| `page` | `""` |
+
+
+## Promo
+
+### `brand`
+
+Brand end card: an app icon (gradient tile + `mark` icon name or image path) lands, then the wordmark (`text`, display role 224 px, `weight` 700) is revealed by an accent mask bar that travels across it (out_quint from the scene start) and lands on the beat `hit_at` (logo hit + music stop), a sheen sweeps the wordmark, `tagline` and `url` rise in, and `badges` (["App Store", ...]) sit on the bottom safe line from beat 2.
+
+| key | default |
+|---|---|
+| `text` | `"brand"` |
+| `tagline` | `""` |
+| `url` | `""` |
+| `mark` | `"spark"` |
+| `weight` | `700` |
+| `size` | `null` |
+| `badges` | `[]` |
+| `badge_kicker` | `"Download on"` |
+| `hit_at` | `"1b"` |
+| `stop_music` | `true` |
+
+### `cta`
+
+Call to action on the grid: tracked `kicker`, the `headline` (168 px, 700) flush-left on the shared anchor, a full-width pill button that springs in on beat 1 and pulses on every beat (spring landing one frame after the kick, with a ring wave), a touch that presses it on the downbeat `tap_at` (click SFX + ripple; the label morphs to `done` if set), a `note` under the button and the `sub` line (platforms) on the bottom safe line. `lockup` (product name) puts a small app icon (`mark`) + name on the top safe line so the block spans the frame.
+
+| key | default |
+|---|---|
+| `kicker` | `""` |
+| `headline` | `"Try it free"` |
+| `button` | `"Get the app"` |
+| `sub` | `""` |
+| `note` | `""` |
+| `done` | `""` |
+| `tap_at` | `null` |
+| `enter` | `"1b"` |
+| `pulse` | `0.045` |
+| `lockup` | `""` |
+| `mark` | `"spark"` |
+
+### `device`
+
+Hero device shot. A phone at `height` of the frame (0.70) springs up from below and turns in yaw from yaw[0] to yaw[1] (in_out_quint over `tilt`, default 4b), then eases back half way over the rest of the shot; the bezel highlight and glass sheen follow the tilt; a soft contact + ambient shadow sits under it. Above it: an optional tracked `kicker`, the `headline` at the headline role (168 px, 700) flush-left on the grid, and `sub` set as a right-aligned standfirst. `callouts` ({text, icon, side, y, x, dy, color}) pop in on the beat (`first_callout`, `callout_gap`): a pill (spring) inside the safe area with a leader line to the point (x, y) on the screen (fractions of the screen), tracked through the tilt. `screen` = screenshot path (9:19.5) or the procedural `ui`; `scroll` = list scroll (px@1080). Legacy `swing` (degrees) sets a symmetric yaw when `yaw` is not given.
+
+| key | default |
+|---|---|
+| `frame` | `"phone"` |
+| `screen` | `""` |
+| `ui` | `{}` |
+| `kicker` | `""` |
+| `headline` | `""` |
+| `sub` | `""` |
+| `callouts` | `[]` |
+| `scroll` | `0` |
+| `swing` | `null` |
+| `yaw` | `null` |
+| `pitch` | `[7, 2]` |
+| `tilt` | `"4b"` |
+| `height` | `0.7` |
+| `first_callout` | `"3b"` |
+| `callout_gap` | `"1b"` |
+| `land` | `"1b"` |
+
+### `features`
+
+Features, one at a time: every `per` beats (default 2b) a full-bleed colour panel wipes in from the right with a large icon, and the label (title role, 126 px) + body line rise in under it on the grid; the outgoing label leaves upward (in_quart). `heading` becomes the panel kicker with a 01/04 counter; progress segments sit on the bottom safe line. Items: {icon, title, text, color}. `layout: "grid"` (or `columns` > 0) keeps the v0.1 cards.
+
+| key | default |
+|---|---|
+| `heading` | `""` |
+| `items` | `[]` |
+| `per` | `"2b"` |
+| `stagger` | `"1/2b"` |
+| `first` | `0.0` |
+| `columns` | `0` |
+| `layout` | `"solo"` |
+
+
+## Data
+
+### `bars`
+
+Horizontal bars over the full content width: tracks and labels on the cut, bars grow (out_expo over `grow`) on a `stagger` from `first` with their figures counting on 16ths; the previous-period marks and deltas land after the last bar, then the callout inside the highlighted bar.
+
+| key | default |
+|---|---|
+| `kicker` | `""` |
+| `title` | `""` |
+| `heading` | `""` |
+| `items` | `[]` |
+| `prefix` | `""` |
+| `suffix` | `""` |
+| `decimals` | `0` |
+| `highlight` | `""` |
+| `horizontal` | `null` |
+| `stagger` | `"1/2b"` |
+| `first` | `"1b"` |
+| `grow` | `"1b"` |
+| `callout` | `""` |
+
+### `candles`
+
+Candlestick chart on the plot band. History sweeps in over the first beat; the last `live` candles then form one per beat with real OHLC motion (open, a path through the low/high to the close, wick tracking the extremes so far). The last full candle closes above `level` on its beat (impact, music hit, the level flips to the accent); the next candle keeps forming.
+
+| key | default |
+|---|---|
+| `kicker` | `""` |
+| `title` | `""` |
+| `heading` | `""` |
+| `seed` | `21` |
+| `n` | `30` |
+| `start` | `100.0` |
+| `end` | `null` |
+| `vol` | `0.025` |
+| `drift` | `0.003` |
+| `ohlc` | `null` |
+| `level` | `null` |
+| `first` | `"0b"` |
+| `live` | `null` |
+| `ma` | `7` |
+| `prefix` | `"$"` |
+| `decimals` | `2` |
+| `callout` | `""` |
+| `reveal` | `null` |
+
+### `counter`
+
+Hero figure on the anchor counting up on 16ths over `count` (odometer roll, weight 300 -> 800) and landing on the downbeat after it; label, a delta pill on the landing and a full-width sparkline (published as "spark" for a match cut into a line chart).
+
+| key | default |
+|---|---|
+| `value` | `null` |
+| `from` | `0` |
+| `decimals` | `0` |
+| `prefix` | `""` |
+| `suffix` | `""` |
+| `label` | `""` |
+| `kicker` | `""` |
+| `heading` | `""` |
+| `delta` | `null` |
+| `delta_note` | `""` |
+| `count` | `"2b"` |
+| `first` | `"0b"` |
+| `spark` | `true` |
+| `seed` | `3` |
+| `color` | `"ink"` |
+| `delay` | `null` |
+
+### `line`
+
+Line chart on the full plot band. With a "spark" hand-off the counter's sparkline grows into the plot; otherwise the line draws in over the first beat. A read cursor then travels the series (in_out_quint over `draw`), lighting the area behind it; event callouts land on the beat after the cursor passes them; the change figure lands when the read ends.
+
+| key | default |
+|---|---|
+| `kicker` | `""` |
+| `title` | `""` |
+| `heading` | `""` |
+| `series` | `{"seed": 11, "n": 60}` |
+| `prefix` | `"$"` |
+| `suffix` | `""` |
+| `decimals` | `0` |
+| `draw` | `"3b"` |
+| `first` | `"1b"` |
+| `events` | `[]` |
+| `x_labels` | `[]` |
+| `change` | `true` |
+| `dek` | `""` |
+
+### `stat_grid`
+
+2 x 2 (or 1 x N) cards filling the plot band: cards cascade in on 16ths from `first`, figures count on 16ths and land together on the downbeat after `count`; each card carries a signed delta and a mini spark or gauge. The first card is published as "card0".
+
+| key | default |
+|---|---|
+| `kicker` | `""` |
+| `title` | `""` |
+| `heading` | `""` |
+| `items` | `[]` |
+| `count` | `"2b"` |
+| `stagger` | `"1/4b"` |
+| `first` | `"0b"` |
+
+### `ticker`
+
+Watchlist rows on the grid (symbol, name, price in mono, change pill), cascading in on 32nds; prices re-quote on every beat with an odometer roll and a row flash in the sign colour. The first row can be born from the stat grid's "card0". A breadth bar (advancing vs declining) closes the band; the market tape runs underneath.
+
+| key | default |
+|---|---|
+| `kicker` | `""` |
+| `title` | `""` |
+| `heading` | `""` |
+| `items` | `[]` |
+| `tape` | `null` |
+| `speed` | `160` |
+| `jitter` | `0.003` |
+| `breadth` | `true` |
+
+
+## Social
+
+### `follow`
+
+Call-to-follow end card. The pill of the previous karaoke scene is handed over on the cut (match on "pill") and springs out into a full-width follow button; the headline rises in line by line on the 8ths; the button is pressed on `tap_at` (default beat 2) with a click + chime, its label morphs to `done`, and it kicks on every beat after (spring). `stats` ([{"value": "312", "label": "clips"}, ...]) sit in a row above the chrome, rising on the 8ths after the press; numeric values count up (out_quint over 1 beat).
+
+| key | default |
+|---|---|
+| `ground_style` | `"paper"` |
+| `backdrop` | `true` |
+| `kicker` | `"Follow for more"` |
+| `text` | `"One idea a day, set to the beat."` |
+| `button` | `"Follow"` |
+| `done` | `"Following"` |
+| `tap_at` | `"2b"` |
+| `note` | `""` |
+| `label` | `"follow"` |
+| `weight` | `650` |
+| `stats` | `[]` |
+
+### `hook`
+
+Hook opener: a stacked headline that lands one line per beat.
+
+| key | default |
+|---|---|
+| `ground_style` | `"paper"` |
+| `backdrop` | `true` |
+| `lines` | `["Two", "seconds.", "That is all", "you get."]` |
+| `kicker` | `""` |
+| `roles` | `[]` |
+| `emphasis` | `[]` |
+| `stagger` | `"1b"` |
+| `first` | `"0b"` |
+| `weight` | `760` |
+| `timer` | `true` |
+| `label` | `"hook"` |
+| `mark` | `2.0` |
+
+### `karaoke`
+
+Spoken-caption karaoke on the 8th grid, one sentence per page.
+
+| key | default |
+|---|---|
+| `ground_style` | `"paper"` |
+| `backdrop` | `true` |
+| `text` | `""` |
+| `words` | `null` |
+| `timing` | `"beat"` |
+| `per` | `0.5` |
+| `lines_per_page` | `null` |
+| `size` | `"title"` |
+| `lead` | `0.0` |
+| `tail` | `0.6` |
+| `emphasis` | `[]` |
+| `kicker` | `""` |
+| `page_on` | `"bar"` |
+| `max_lines` | `3` |
+| `audiogram` | `true` |
+| `ticks` | `true` |
+| `label` | `"caption"` |
+| `weight` | `650` |
+| `riser` | `true` |
+| `speaker` | `null` |
+| `pulse` | `"1/2b"` |
+| `gap` | `0.0` |
+
+### `quote`
+
+Pull-quote card revealed word by word on the 8th grid.
+
+| key | default |
+|---|---|
+| `ground_style` | `"paper"` |
+| `backdrop` | `true` |
+| `text` | `""` |
+| `author` | `""` |
+| `role` | `""` |
+| `size` | `"title"` |
+| `stagger` | `"1/2b"` |
+| `first` | `"1/2b"` |
+| `kicker` | `""` |
+| `emphasis` | `[]` |
+| `weight` | `440` |
+| `max_lines` | `5` |
+| `exit` | `false` |
+| `ticks` | `true` |
+| `riser` | `true` |
+| `label` | `"quote"` |
+| `card` | `true` |
+| `meta` | `""` |
+| `speaker` | `null` |
+
+
+## Any mode
+
+### `end_card`
+
+Closing card on the grid, flush-left from the shared top anchor: a brand lockup (accent badge with an icon + wordmark on the subhead role), the statement (title role), an accent line (body), a CTA pill and the one handle, with small print standing on the bottom safe line. Elements enter one per half beat on the registry "enter" ease and the badge and CTA arrow pulse on every beat. The card owns the handle: the film's corner handle is hidden while it is on screen, and the handle colour is picked for >= 4.5:1 contrast on the card's ground.
+
+| key | default |
+|---|---|
+| `icon` | `"book"` |
+| `brand` | `""` |
+| `title` | `"For learning only."` |
+| `body` | `"Not medical advice."` |
+| `small` | `""` |
+| `handle` | `""` |
+| `cta` | `""` |
+| `stop_music` | `false` |
+| `sfx` | `"chime"` |
+| `align` | `"left"` |
+| `step` | `"1/2b"` |
+
+### `image`
+
+Full-bleed picture with a Ken Burns push, gradient scrim and an optional caption set flush-left on the bottom safe line.
+
+| key | default |
+|---|---|
+| `src` | `""` |
+| `zoom` | `[1.0, 1.14]` |
+| `pan` | `[[-0.3, 0.0], [0.3, 0.0]]` |
+| `caption` | `""` |
+| `scrim` | `0.55` |
+| `caption_style` | `"title"` |
+
+### `logo`
+
+Logo sting: a line draws, the wordmark rises through it, tracking tightens, tagline. Centred on the optical centre of the safe zone (a sting is the one place centring belongs).
+
+| key | default |
+|---|---|
+| `text` | `"BRAND"` |
+| `tagline` | `""` |
+| `mark` | `""` |
+| `weight` | `800` |
+| `role` | `"display"` |
+| `stop_music` | `true` |
+| `line` | `true` |
+| `hit_at` | `0.32` |
+| `url` | `""` |
+| `style` | `"display"` |
+
+### `text`
+
+A paragraph that fades in word by word, optional heading and highlighted terms. Set on the grid from the shared top anchor; `size` (reference px) overrides the body role size.
+
+| key | default |
+|---|---|
+| `heading` | `""` |
+| `body` | `""` |
+| `highlight` | `[]` |
+| `size` | `null` |
+| `align` | `"left"` |
+| `rate` | `0.06` |
+| `style` | `"body"` |
+| `heading_style` | `"title"` |
+
+### `title`
+
+Editorial title card: tracked kicker on the shared top anchor, a balanced headline under it, and the subtitle set as a standfirst on the bottom safe line under a growing hairline. `size` (reference px) overrides the `style` role size; `title_role` picks the theme face.
+
+| key | default |
+|---|---|
+| `kicker` | `""` |
+| `title` | `"Title"` |
+| `subtitle` | `""` |
+| `align` | `"left"` |
+| `size` | `null` |
+| `style` | `"headline"` |
+| `title_role` | `"display"` |
+| `weight` | `null` |
+| `accent_line` | `-1` |
+| `sfx` | `"swish"` |
+
+## Footage (any mode)
+
+### `clip`
+
+Footage from a local video file: trim with `in`/`out` (seconds or beats, snapped with the grid), `fit` cover (with a `focus` point and a slow `zoom`) or contain, an optional `grade`, `blur` and `opacity`, a `scrim` that keeps type legible, an optional picture-in-picture `box`, and `over`: a list of scenes (title, callout, karaoke, counter ...) drawn on top of the footage. `end` = hold (freeze the last frame) or loop. `source` = {"swap": {...}} plays footage from the optional swap backend (see docs/SWAP.md) and falls back to the input video without it.
+
+| key | default |
+|---|---|
+| `src` | `""` |
+| `source` | `null` |
+| `in` | `0.0` |
+| `out` | `null` |
+| `speed` | `1.0` |
+| `end` | `"hold"` |
+| `fit` | `"cover"` |
+| `focus` | `[0.5, 0.5]` |
+| `zoom` | `[1.0, 1.06]` |
+| `ease` | `"move"` |
+| `opacity` | `1.0` |
+| `grade` | `null` |
+| `blur` | `0.0` |
+| `scrim` | `0.45` |
+| `box` | `null` |
+| `radius` | `24` |
+| `backdrop` | `"blur"` |
+| `sfx` | `null` |
+| `over` | `[]` |
+
+---
+
+<!-- docs/ARCHITECTURE.md -->
+
+# Architecture
+
+```
+            agents (MCP stdio / streamable HTTP)   function calling   shell
+                       │                                  │              │
+                       ▼                                  ▼              ▼
+            mcp_server.py: 8 tools ─────── run_tool() ──────── --call / cli.py (kstudio)
+                       │
+spec.json ──► spec.py (JSONC / JS loader, hash) ──► schema.py (JSON Schema from the engine, validation, fix hints)
+                       │
+                       ▼
+                  film.py  Film
+                       │  timeline.py: markers, beat grid, time expressions ("4b", "bar3", "drop-2b")
+                       │  scenes/*: 31 types, each = draw(ctx) + cues() + shutter()
+                       │  transitions.py: beat-quantised windows (cut ... match), element hand-off
+                       │  camera.py: 2.5D dolly, parallax, drift with continuity across cuts
+                       │  layout.py: 12-column grid, safe zones, type scale
+                       ▼
+pipeline.build ─► render.py ── N spawn workers (resources.py: free RAM / CPU)
+                 │              each: compositor.py → Skia raster → linear-light motion blur
+                 │              → grade.py (tone curve, split toning) → bloom / vignette / grain
+                 │              → libx264 chunk, verified with ffprobe, renamed atomically (resume)
+                 │            concat (-c copy, +faststart)
+                 ├─► audio/mix.py: bed (audio/music.py procedural styles | user file | none)
+                 │              + SFX (audio/synth.py kit) from sfx markers and transition cues,
+                 │              ducking, loudness → gain → true-peak limiter, iterate to -14 LUFS / -1 dBTP
+                 ├─► mux (AAC 48 kHz)
+                 └─► audit.py: ffprobe + decoded motion analysis + loudness → PASS/FAIL report.json
+```
+
+Renders are deterministic: a frame is a pure function of (spec, time), so any worker can draw any
+frame and an interrupted render resumes from its finished 2-second chunks.
+
+## Interfaces
+
+| module | role |
+|---|---|
+| `mcp_server.py` | zero-dependency MCP server: stdio (default) and streamable HTTP (`--http`); both protocol eras (2026-07-28 stateless with `server/discover`, and `initialize` for 2025-11-25 / 2025-06-18 / 2025-03-26 / 2024-11-05); tools `list_modes`, `list_scenes`, `get_schema`, `validate_spec`, `new_spec`, `preview`, `render` (progress notifications, cancellable), `audit`; `run_tool()` for in-process function calling; `--call` for one-shot JSON |
+| `cli.py` | the `kstudio` command (`modes`, `scenes`, `new`, `info`, `preview`, `render`, `audit`, `mix`, `beats`, `sfx`) |
+| `schema.py` | the spec JSON Schema built at run time from the scene registry and engine tables; validator with JSON Pointer paths, hints and a repair prompt |
+| `exitcodes.py` | exit codes and machine-readable error codes shared by the command line and the tools |
+| `brief.py` | brief → prompt pack (system prompt, schema, examples, beat rules) for any model; no model call |
+| `docs/tools/generate.py` | exports the MCP tool list as function-calling schemas and a manifest; `--check` keeps them in sync |
+
+## Engine
+
+| module | role |
+|---|---|
+| `spec.py` | loads JSON with comments and trailing commas (or a JS module's default export) |
+| `timeline.py` | `Timeline` / `Marker`: sections with energy 0-3, cues, captions, sfx, hits; seconds, beats, bars and named-marker expressions; beat ↔ time on the grid |
+| `beats.py` | onset envelope + autocorrelation tempo + phase fit → `BeatGrid` from any audio file |
+| `film.py` | builds scenes on the timeline, resolves markers and snapping, emits scene cues and transition sounds, draws the frame at time t |
+| `scenes/` | `kinetic`, `explainer`, `promo`, `data`, `social` and `common` scene families on a shared `base.Scene` (grounds: solid, gradient, grid, dots, blobs, paper, mesh) |
+| `transitions.py` | 13 transition kinds with beat-length windows, anchors, shutter multipliers and default sounds; wipe shapes, directions, shared-element `match` |
+| `camera.py` | per-mode and per-scene camera (push, carry, drift, roll, truck, yaw, pitch, bump, shake ...) |
+| `layout.py` | grid and type roles at 1080 reference px, scaled to any preset |
+| `ease.py` | easing grammar, springs with bounded overshoot, staggers, deterministic noise |
+| `draw.py`, `fonts.py` | Skia helpers, icons, palettes, variable-font instancing |
+| `compositor.py` | adaptive sub-frame motion blur, post chain, dithered output |
+| `grade.py` | colour grades `neutral`, `ink`, `lab`, `studio`, `terminal`, `warm` compiled to lookup tables |
+| `modes.py` | 5 themes and per-mode music, camera, post, transition and audit defaults |
+| `presets.py` | output presets (reel, story, landscape, youtube, square, portrait) and quality levels (draft, standard, high) |
+| `render.py`, `pipeline.py` | chunk planning, worker pool, encoder, manifest and resume, concat, mix, mux, audit, report |
+| `resources.py` | free-RAM and CPU aware worker count |
+| `preview.py` | stills at scene middles and transitions plus a contact sheet |
+| `audit.py` | codec, frame rate, frames, duration, motion ratio, longest hold, black frames, loudness, true peak, A/V gap, with per-mode thresholds |
+
+## Audio
+
+| module | role |
+|---|---|
+| `audio/music.py` | 5 arranged styles (`drive`, `calm`, `bright`, `pulse`, `lofi`) following section energy: fills, risers, sidechain, hard stop |
+| `audio/instruments.py` | synthesised drums, bass, keys and pads (no samples) |
+| `audio/synth.py` | 29 synthesised sound effects (14 of them UI sounds) with peak offsets for alignment |
+| `audio/mix.py` | bed + effects, ducking, LUFS normalisation, look-ahead limiter |
+| `audio/dsp.py` | NumPy DSP: envelopes, filters, oscillators, convolution reverb, WAV I/O |

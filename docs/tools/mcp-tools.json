@@ -1,0 +1,774 @@
+{
+  "tools": [
+    {
+      "name": "list_modes",
+      "title": "List modes",
+      "description": "List the video modes (kinetic, explainer, promo, data, social) with their theme, music style and tempo, default transition and audit thresholds, plus the output presets, quality levels, frame rates and the time units specs use. Call this first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "modes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "presets": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "title": "List modes",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "list_scenes",
+      "title": "List scene types",
+      "description": "List the scene types a spec can use (title, slam, counter, bars, karaoke, ...) with a one-line summary and their parameters with default values. Pass `type` for one scene.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Only this scene type, e.g. \"counter\"."
+          },
+          "verbose": {
+            "type": "boolean",
+            "description": "Include parameters and defaults. Default true."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "scenes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "title": "List scene types",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_schema",
+      "title": "Get the spec JSON Schema",
+      "description": "Return the JSON Schema of a spec (draft 2020-12). With `mode`, also return that mode's defaults and its example spec, the best starting point for writing a new one.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "kinetic",
+              "explainer",
+              "promo",
+              "data",
+              "social"
+            ],
+            "description": "Video mode."
+          },
+          "scene_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Narrow the scene part of the schema to these types. The full schema is large; narrowing keeps it small."
+          },
+          "include_example": {
+            "type": "boolean",
+            "description": "Include the mode's example spec. Default true."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "schema": {
+            "type": "object"
+          },
+          "example": {
+            "type": [
+              "object",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "title": "Get the spec JSON Schema",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "validate_spec",
+      "title": "Validate a spec",
+      "description": "Check a spec without rendering: structure, scene types, parameters, time expressions, transitions, then a dry build and the beat-grid lint. Returns ok, errors and warnings, each with a JSON Pointer path and a hint. Pass spec_path, or spec_json for a spec that is not on disk yet.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spec_path": {
+            "type": "string",
+            "description": "Path of a spec file (spec.json / spec.jsonc / spec.js) or of a project directory that contains one."
+          },
+          "spec_json": {
+            "type": "string",
+            "description": "The spec itself as JSON text (comments and trailing commas allowed). Use instead of spec_path."
+          },
+          "base_dir": {
+            "type": "string",
+            "description": "Directory relative asset paths in spec_json resolve against. Default: the server's working directory."
+          },
+          "strict": {
+            "type": "boolean",
+            "description": "Treat unknown keys as errors. Default false."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "summary": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "title": "Validate a spec",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "new_spec",
+      "title": "Create a project",
+      "description": "Create a project directory from a mode's example (spec.json plus any assets). Pass spec_json to write your own spec instead of the example. Refuses a non-empty directory unless force is true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "kinetic",
+              "explainer",
+              "promo",
+              "data",
+              "social"
+            ],
+            "description": "Video mode."
+          },
+          "dir": {
+            "type": "string",
+            "description": "Project directory to create."
+          },
+          "spec_json": {
+            "type": "string",
+            "description": "Optional spec as JSON text to write as spec.json."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Write into a non-empty directory. Default false."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "mode",
+          "dir"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "dir": {
+            "type": "string"
+          },
+          "spec_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "title": "Create a project",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "preview",
+      "title": "Preview stills",
+      "description": "Render still frames (the middle of every scene and every transition, or the times in `at`) and a labelled contact sheet, in a few seconds, without audio. Returns the file paths and the contact sheet as an image. Use it to check layout before a full render.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spec_path": {
+            "type": "string",
+            "description": "Path of a spec file (spec.json / spec.jsonc / spec.js) or of a project directory that contains one."
+          },
+          "spec_json": {
+            "type": "string",
+            "description": "The spec itself as JSON text (comments and trailing commas allowed). Use instead of spec_path."
+          },
+          "at": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Times in seconds to render."
+          },
+          "preset": {
+            "type": "string",
+            "enum": [
+              "reel",
+              "story",
+              "landscape",
+              "youtube",
+              "square",
+              "portrait"
+            ],
+            "description": "Output size: reel/story 1080x1920, landscape/youtube 1920x1080, square 1080x1080, portrait 1080x1350. Default reel."
+          },
+          "scale": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 1.0,
+            "description": "Resolution scale of the stills. Default 0.5."
+          },
+          "out_dir": {
+            "type": "string",
+            "description": "Where to write stills. Default <project>/out/preview."
+          },
+          "include_image": {
+            "type": "boolean",
+            "description": "Attach the contact sheet image. Default true."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "contact_sheet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stills": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "title": "Preview stills",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "render",
+      "title": "Render the video",
+      "description": "Render the final MP4 (H.264 High + AAC 48 kHz, -14 LUFS, -1 dBTP) with motion blur, grade, music and sound effects, then audit it. Sends progress notifications when the request has a progressToken. Resumable: an interrupted render keeps finished chunks. ok is true when the video was written and passed the audit; failed_checks lists what did not.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spec_path": {
+            "type": "string",
+            "description": "Path of a spec file (spec.json / spec.jsonc / spec.js) or of a project directory that contains one."
+          },
+          "output": {
+            "type": "string",
+            "description": "Output .mp4 path. Default <project>/out/<name>_<preset>.mp4."
+          },
+          "preset": {
+            "type": "string",
+            "enum": [
+              "reel",
+              "story",
+              "landscape",
+              "youtube",
+              "square",
+              "portrait"
+            ],
+            "description": "Output size: reel/story 1080x1920, landscape/youtube 1920x1080, square 1080x1080, portrait 1080x1350. Default reel."
+          },
+          "fps": {
+            "type": "integer",
+            "enum": [
+              24,
+              25,
+              30,
+              50,
+              60
+            ],
+            "description": "Frame rate. Default 30."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "standard",
+              "high"
+            ],
+            "description": "draft (no motion blur, fast), standard (default) or high."
+          },
+          "k4": {
+            "type": "boolean",
+            "description": "Double the preset resolution (4K). Default false."
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Render processes. Default: sized to free memory and CPUs."
+          },
+          "fresh": {
+            "type": "boolean",
+            "description": "Ignore finished chunks from an earlier run. Default false."
+          },
+          "audit": {
+            "type": "boolean",
+            "description": "Run the quality audit. Default true."
+          },
+          "snap": {
+            "type": "string",
+            "enum": [
+              "beat",
+              "8th",
+              "16th",
+              "bar"
+            ],
+            "description": "Snap seconds-valued scene lengths and starts to this beat division."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "spec_path"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "output": {
+            "type": "string"
+          },
+          "pass": {
+            "type": "boolean"
+          },
+          "report_path": {
+            "type": "string"
+          },
+          "failed_checks": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "title": "Render the video",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "audit",
+      "title": "Audit a video",
+      "description": "Measure a finished video: motion ratio and longest hold, black frames, codec and pixel format, loudness and true peak, frame rate (r = avg = n/d), frame count and audio/video length. ok is true when every check passes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "video": {
+            "type": "string",
+            "description": "Path of the video file."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "kinetic",
+              "explainer",
+              "promo",
+              "data",
+              "social"
+            ],
+            "description": "Use this mode's motion and hold thresholds."
+          },
+          "fps": {
+            "type": "number",
+            "description": "Expected frame rate."
+          },
+          "frames": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Expected video frame count (+-1)."
+          },
+          "min_motion": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Minimum motion ratio."
+          },
+          "max_hold": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Longest allowed still hold in seconds."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "video"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "pass": {
+            "type": "boolean"
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checks": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "title": "Audit a video",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "swap",
+      "title": "Swap a character into a video (optional backend)",
+      "description": "Optional. Replace a person in a video with a character image (mode simple), or change a tracked object (mode object), on a ComfyUI server running Openjutsu's workflows, set by KSTUDIO_COMFY_URL. Downloads the MP4 for use as a clip scene's src. Returns BACKEND_UNREACHABLE when no backend is configured or reachable; nothing else depends on it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "video": {
+            "type": "string",
+            "description": "Path of the source video."
+          },
+          "character": {
+            "type": "string",
+            "description": "Path of the character / reference image."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "simple",
+              "object"
+            ],
+            "description": "simple (default) or object."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "simple: who gets replaced; object: what the target becomes."
+          },
+          "target": {
+            "type": "string",
+            "description": "What SAM tracks (simple: person, object: hair by default)."
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Generation seed. Default 0."
+          },
+          "output": {
+            "type": "string",
+            "description": "Output .mp4. Default ./out/swap/<key>.mp4."
+          },
+          "timeout": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Seconds to wait. Default 3600."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "video",
+          "character"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "true when the thing asked about is good"
+          },
+          "error": {
+            "type": "object",
+            "description": "present when the tool failed: {code, message, hint}",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "hint": {
+                "type": "string"
+              }
+            }
+          },
+          "output": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "prompt_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "annotations": {
+        "title": "Swap a character into a video (optional backend)",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ]
+}

@@ -33,9 +33,33 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libegl1 libgl1 libfontconfig1
-      - run: pip install -r requirements.txt pytest
+      - run: pip install -r requirements.txt pytest jsonschema
       - run: python -m pytest -q
       - name: Smoke test (preview)
         run: |
           bin/kstudio new kinetic /tmp/smoke
           bin/kstudio preview /tmp/smoke
+      - name: Smoke test (machine interface)
+        run: |
+          bin/kstudio schema | python -m json.tool > /dev/null
+          bin/kstudio validate /tmp/smoke --json | python -c "import json, sys; assert json.load(sys.stdin)['valid']"
+          set +e; bin/kstudio validate '{"scenes": [{"type": "nope"}]}' --json > /tmp/bad.json; code=$?; set -e
+          test "$code" = 3
+          python -c "import json; assert json.load(open('/tmp/bad.json'))['error']['path'] == '/scenes/0/type'"
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install runtime libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libfontconfig1
+      - run: uv build
+      - name: Installed wheel runs and finds its bundled examples
+        run: |
+          cd "$RUNNER_TEMP"
+          WHEEL="$(ls "$GITHUB_WORKSPACE"/dist/*.whl)"
+          uvx --python 3.12 --from "$WHEEL" kinetic-studio --help
+          uvx --python 3.12 --from "$WHEEL" kinetic-studio schema --json | python3 -c "import json, sys; print(json.load(sys.stdin)['scene_type_count'])"
+          uvx --python 3.12 --from "$WHEEL" kinetic-studio new promo "$RUNNER_TEMP/p" --json
+          uvx --python 3.12 --from "$WHEEL" kinetic-studio validate "$RUNNER_TEMP/p" --json

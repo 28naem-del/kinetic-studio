@@ -1,0 +1,122 @@
+{
+  "file": "demos/data.mp4",
+  "probe": {
+    "width": 720,
+    "height": 1280,
+    "r_fps": 30.0,
+    "avg_fps": 30.0,
+    "measured_fps": 30.0,
+    "video_frames": 450,
+    "video_duration": 15.0,
+    "fps": 30.0,
+    "codec": "h264",
+    "profile": "High",
+    "level": "3.1",
+    "pix_fmt": "yuv420p",
+    "frames": 450,
+    "duration": 15.0,
+    "size_mb": 18.58,
+    "bitrate_kbps": 9908,
+    "audio": {
+      "codec": "aac",
+      "sample_rate": 48000,
+      "channels": 2,
+      "duration": 15.0
+    }
+  },
+  "motion": {
+    "frames_decoded": 450,
+    "motion_ratio": 0.962,
+    "still_ratio": 0.038,
+    "longest_hold_s": 0.03,
+    "motion_basis": "denoised (two-lag, gate 1.75, reference-1080-v2)",
+    "motion_analysis_size": [
+      134,
+      240
+    ],
+    "black_basis": "mean luma < 10.0 on reference-1080-v2",
+    "motion_ratio_raw": 1.0,
+    "longest_hold_raw_s": 0.0,
+    "mean_motion": 2.76,
+    "black_frames": 0,
+    "first_frame_black": false
+  },
+  "loudness": {
+    "lufs": -14.2,
+    "true_peak": -2.7,
+    "lra": 1.1,
+    "tp_ebur128": -2.7,
+    "tp_loudnorm": -2.72,
+    "lufs_loudnorm": -14.15,
+    "meter": "ebur128"
+  },
+  "checks": {
+    "motion_ratio": {
+      "ok": true,
+      "value": 0.962,
+      "want": ">= 0.7"
+    },
+    "longest_hold": {
+      "ok": true,
+      "value": 0.03,
+      "want": "<= 1.5 s"
+    },
+    "first_frame": {
+      "ok": true,
+      "value": "content",
+      "want": "not black"
+    },
+    "codec": {
+      "ok": true,
+      "value": "h264 High",
+      "want": "h264 High"
+    },
+    "pix_fmt": {
+      "ok": true,
+      "value": "yuv420p",
+      "want": "yuv420p"
+    },
+    "audio": {
+      "ok": true,
+      "value": "aac 48000",
+      "want": "aac 48000"
+    },
+    "loudness": {
+      "ok": true,
+      "value": -14.2,
+      "want": "-14.0 \u00b11.0 LUFS"
+    },
+    "true_peak": {
+      "ok": true,
+      "value": -2.7,
+      "want": "<= -1.3 dBTP"
+    },
+    "black_frames": {
+      "ok": true,
+      "value": 0,
+      "want": "<= 0"
+    },
+    "av_length": {
+      "ok": true,
+      "value": "audio-video +0.000 s",
+      "want": "|gap| <= 0.050 s"
+    },
+    "fps": {
+      "ok": true,
+      "value": "r 30 / avg 30 / n/d 30",
+      "want": 30.0
+    }
+  },
+  "pass": true,
+  "_publication": {
+    "kind": "public path-redacted derivative; not a new audit",
+    "changed_json_pointers": [
+      "/file"
+    ],
+    "original_report_sha256": "92ce721e87d038505ad50bfcdf196f6e881940cad1d9d897af489649c5dc9257",
+    "video_sha256": "55682d371778b66e9dcc5f9e12ba785f0da072abf575e180e270b063cc1c1b3a",
+    "raw_audit_sha256": "a9e51ca9850e72796d327643961761a8c34db8fcc6fc106cc185a8cd8b8eec5f",
+    "selection": "/deliveries/phone/candidate2; lossless JSON subtree extraction, formatting only; NOT a new audit",
+    "metrics_and_checks": "unchanged"
+  }
+}

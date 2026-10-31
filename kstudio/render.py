@@ -24,6 +24,8 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
+import numpy as np
+
 from .presets import Output
 
 
@@ -37,29 +39,85 @@ def ffprobe_frames(path: str) -> int:
         return -1
 
 
-def encoder_cmd(out: Output, path: str, threads: int = 2) -> list[str]:
+# Rate control for chunked encodes. Every 2 s chunk is a separate x264 run, and x264 starts each run
+# with the VBV buffer `vbv-init` full; with the old bufsize = 2 x maxrate and the default init of 0.9
+# every chunk could burst ~1.8 s of maxrate into its first second, so the concatenated stream ran at
+# 1.74 x maxrate over 1 s windows. A half-second buffer that starts 30% full, against a ceiling 5%
+# under the level's maxrate, keeps the joined stream inside maxrate x 1.1 (measured 1.06-1.09).
+VBV_RATE = 0.95      # x264 -maxrate as a fraction of Output.maxrate_kbps
+VBV_BUFFER_S = 0.5   # -bufsize in seconds of the nominal maxrate
+VBV_INIT = 0.3       # initial buffer fill of each chunk
+
+# Determinism. With more than one x264 thread (frame threads or sliced threads alike), the VBV
+# rate control reads the predicted size of rows and frames that other threads are still encoding,
+# so with a buffer this tight the bitstream depends on thread timing: 3 encodes of one raw chunk
+# gave 3 different streams. One x264 thread per chunk is bit-exact run to run and machine to
+# machine; the chunk workers already run in parallel, and a single-threaded x264 encodes a
+# 1080x1920 frame faster than the compositor draws one, so the pipe rarely waits on it.
+ENCODER_THREADS = 1
+
+
+def encoder_cmd(out: Output, path: str, threads: int = ENCODER_THREADS) -> list[str]:
+    rate = int(out.maxrate_kbps * VBV_RATE)
+    buf = int(out.maxrate_kbps * VBV_BUFFER_S)
     return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{out.width}x{out.height}", "-r", str(out.fps), "-i", "-",
             "-vf", "scale=out_color_matrix=bt709:out_range=tv",
             "-c:v", "libx264", "-preset", out.x264_preset, "-crf", str(out.crf),
-            "-maxrate", f"{out.maxrate_kbps}k", "-bufsize", f"{out.maxrate_kbps * 2}k",
+            "-maxrate", f"{rate}k", "-bufsize", f"{buf}k", "-x264-params", f"vbv-init={VBV_INIT}",
             "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", out.level,
             "-g", str(out.fps * 2), "-bf", "2", "-threads", str(threads),
             "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
             "-f", "mpegts", path]
 
 
+MIN_CHUNK_FRAMES = 3  # -bf 2: a chunk of 1-2 frames has no B-frame reorder delay (dts == pts), unlike every
+                      # other chunk, so concatenated it leaves a dts gap (61 frames read 610/21 fps)
+
+
 def plan_chunks(n_frames: int, fps: int, chunk_seconds: float = 2.0) -> list[tuple[int, int]]:
+    """Fixed-size chunks covering [0, n_frames); a tail shorter than MIN_CHUNK_FRAMES joins the
+    previous chunk."""
     size = max(1, int(round(fps * chunk_seconds)))
-    return [(a, min(a + size, n_frames)) for a in range(0, n_frames, size)]
+    ch = [(a, min(a + size, n_frames)) for a in range(0, n_frames, size)]
+    if len(ch) > 1 and ch[-1][1] - ch[-1][0] < MIN_CHUNK_FRAMES:
+        ch[-2:] = [(ch[-2][0], n_frames)]
+    return ch
 
 
 # ---------------------------------------------------------------------- worker
+
+def cv_threads(workers: int, cores: int | None = None, load: float | None = None) -> int:
+    """OpenCV threads per render worker. OpenCV's default pool (every core, in every worker) costs
+    ~45% more CPU per frame than one thread and oversubscribes a machine that is already busy, so
+    a worker gets one thread unless cores are idle: then it takes its share of the idle cores
+    (wall time on an otherwise idle machine). ``load`` = 1-min load average before the workers
+    start; ``KSTUDIO_CV_THREADS`` overrides."""
+    env = os.environ.get("KSTUDIO_CV_THREADS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    cores = cores or os.cpu_count() or 2
+    if load is None:
+        try:
+            load = os.getloadavg()[0]
+        except (AttributeError, OSError):
+            load = float(cores)
+    idle = max(0.0, cores - load)
+    return max(1, min(cores // max(1, workers), int(idle // max(1, workers))))
+
 
 def _worker(wid: int, spec: dict, out_d: dict, grid: dict | None, post: dict | None, work_dir: str,
             tasks: mp.Queue, results: mp.Queue) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
+        try:  # see cv_threads(): the parent picks the count before the workers start
+            import cv2
+            cv2.setNumThreads(int(os.environ.get("KSTUDIO_CV_THREADS_RUN", "1") or 1))
+        except Exception:  # noqa: BLE001
+            pass
         from .beats import BeatGrid
         from .compositor import Compositor
         from .film import Film
@@ -67,41 +125,60 @@ def _worker(wid: int, spec: dict, out_d: dict, grid: dict | None, post: dict | N
         bg = BeatGrid(**grid) if grid else None
         film = Film(spec, out.width, out.height, beat_grid=bg)
         comp = Compositor(film, out, post)
-        threads = max(1, min(4, (os.cpu_count() or 2) // max(1, int(os.environ.get("KSTUDIO_WORKERS", "1")))))
     except Exception as e:  # noqa: BLE001
         import traceback
         results.put({"type": "error", "worker": wid, "error": f"{e}\n{traceback.format_exc()}"})
         return
+
+    def finish(enc: tuple) -> None:
+        proc, k, a, b, part, final, t0, stats = enc
+        err = proc.stderr.read().decode(errors="replace")
+        rc = proc.wait()
+        if rc != 0:
+            raise RuntimeError(f"ffmpeg exited {rc}: {err[-800:]}")
+        got = ffprobe_frames(part)
+        if got != b - a:
+            raise RuntimeError(f"chunk {k}: expected {b - a} frames, encoder wrote {got}")
+        os.replace(part, final)
+        results.put({"type": "chunk_done", "worker": wid, "chunk": k, "frames": b - a,
+                     "seconds": round(time.time() - t0, 3), "stats": stats})
+
+    # The single-threaded encoder (ENCODER_THREADS) still holds its lookahead when the last frame
+    # of a chunk is piped in; it drains while this worker draws the next chunk, and is finished
+    # (checked, renamed, reported) only then, so the drain never stalls the worker.
+    pending: tuple | None = None
     while True:
         try:
             job = tasks.get(timeout=0.5)
         except queue.Empty:
             continue
-        if job is None:
-            break
-        k, a, b = job
-        final = os.path.join(work_dir, f"chunk_{k:04d}.ts")
-        part = final + ".partial"
-        t0 = time.time()
-        proc = subprocess.Popen(encoder_cmd(out, part, threads), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        k = None
+        proc = None
         try:
+            if job is None:
+                if pending:
+                    k = pending[1]
+                    finish(pending)
+                    pending = None
+                break
+            k, a, b = job
+            final = os.path.join(work_dir, f"chunk_{k:04d}.ts")
+            part = final + ".partial"
+            t0 = time.time()
+            proc = subprocess.Popen(encoder_cmd(out, part), stdin=subprocess.PIPE, stderr=subprocess.PIPE)
             for i in range(a, b):
                 proc.stdin.write(comp.frame(i).tobytes())  # type: ignore[union-attr]
                 if (i - a) % 6 == 5 or i == b - 1:
                     results.put({"type": "progress", "worker": wid, "chunk": k, "frame": i})
             proc.stdin.close()  # type: ignore[union-attr]
-            err = proc.stderr.read().decode(errors="replace")  # type: ignore[union-attr]
-            rc = proc.wait()
-            if rc != 0:
-                raise RuntimeError(f"ffmpeg exited {rc}: {err[-800:]}")
-            got = ffprobe_frames(part)
-            if got != b - a:
-                raise RuntimeError(f"chunk {k}: expected {b - a} frames, encoder wrote {got}")
-            os.replace(part, final)
-            results.put({"type": "chunk_done", "worker": wid, "chunk": k, "frames": b - a,
-                         "seconds": round(time.time() - t0, 3), "stats": dict(comp.stats)})
+            if pending:
+                k = pending[1]
+                finish(pending)
+            pending = (proc, job[0], a, b, part, final, t0, dict(comp.stats))
         except Exception as e:  # noqa: BLE001
-            proc.kill()
+            for enc in (proc, pending[0] if pending else None):
+                if enc is not None:
+                    enc.kill()
             import traceback
             results.put({"type": "error", "worker": wid, "chunk": k, "error": f"{e}\n{traceback.format_exc()}"})
             break
@@ -121,6 +198,15 @@ class RenderLog:
 
     def close(self) -> None:
         self.fh.close()
+
+
+def write_concat_list(path: str, work_dir: str, chunks: list[tuple[int, int]], fps: int) -> None:
+    """Concat-demuxer list for the chunk files, each with its exact duration so the timestamps of the
+    joined stream stay on the frame grid (avg_frame_rate == fps)."""
+    with open(path, "w") as fh:
+        for k, (a, b) in enumerate(chunks):
+            fh.write(f"file '{os.path.join(work_dir, f'chunk_{k:04d}.ts')}'\n")
+            fh.write(f"duration {(b - a) / fps:.6f}\n")
 
 
 def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerprint: str, n_frames: int,
@@ -168,6 +254,7 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
         for _ in range(workers):
             tasks.put(None)
         os.environ["KSTUDIO_WORKERS"] = str(workers)
+        os.environ["KSTUDIO_CV_THREADS_RUN"] = str(cv_threads(workers))
         procs = [ctx.Process(target=_worker, args=(w, spec, asdict(out), grid, post, work_dir, tasks, results),
                              daemon=True) for w in range(workers)]
         for proc in procs:
@@ -175,6 +262,7 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
         progress: dict[int, int] = {}
         remaining = len(todo)
         error = None
+        interrupted: KeyboardInterrupt | None = None
         last_print = 0.0
         try:
             while remaining > 0:
@@ -208,8 +296,9 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
                 if on_progress and time.time() - last_print > 0.5:
                     on_progress(info)
                     last_print = time.time()
-        except KeyboardInterrupt:
+        except KeyboardInterrupt as e:
             error = "interrupted (finished chunks are kept; re-run the same command to resume)"
+            interrupted = e
         finally:
             for proc in procs:
                 if error:
@@ -218,12 +307,14 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
         if error:
             if log:
                 log.write("render_failed", error=error[:2000])
+            if interrupted is not None:  # re-raised after cleanup: Ctrl-C (exit 130) / a cancel, not a failure
+                raise interrupted
             raise RuntimeError(error)
-    # concat
+    # concat. Every entry carries its exact duration (frames / fps): without it the demuxer estimates a
+    # chunk's length from its last packet's pts, which with B-frame reordering can be one frame short,
+    # so the next chunk's first frame lands on an already-used pts and the file reads e.g. 13500/449 fps.
     lst = os.path.join(work_dir, "concat.txt")
-    with open(lst, "w") as fh:
-        for k in range(len(chunks)):
-            fh.write(f"file '{os.path.join(work_dir, f'chunk_{k:04d}.ts')}'\n")
+    write_concat_list(lst, work_dir, chunks, out.fps)
     r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", lst,
                         "-c", "copy", "-movflags", "+faststart", out_path], capture_output=True, text=True)
     if r.returncode != 0:
@@ -234,17 +325,133 @@ def render_video(spec: dict, out: Output, out_path: str, work_dir: str, fingerpr
         log.write("render_done", frames=got, expected=n_frames, seconds=round(el, 2), workers=workers)
     if got != n_frames:
         raise RuntimeError(f"final video has {got} frames, expected {n_frames}")
+    vt = video_timing(out_path)
+    if log:
+        log.write("concat_timing", avg_frame_rate=vt["avg_frame_rate"], r_frame_rate=vt["r_frame_rate"],
+                  video_duration=vt["video_duration"])
+    if abs(vt["avg_fps"] - out.fps) > 1e-3 or abs(vt["video_duration"] - n_frames / out.fps) > 0.5 / out.fps:
+        raise RuntimeError(f"concatenated video timing drifted: avg_frame_rate {vt['avg_frame_rate']}, "
+                           f"duration {vt['video_duration']} s for {n_frames} frames at {out.fps} fps")
     return {"frames": got, "seconds": round(el, 2), "workers": workers, "resumed_chunks": len(done),
             "rendered_chunks": len(todo)}
 
 
-def mux(video: str, audio: str, out_path: str) -> None:
-    r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", video, "-i", audio,
-                        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                        "-ar", "48000", "-shortest", "-movflags", "+faststart", out_path],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"mux failed: {r.stderr[-800:]}")
+def _rate(r: str | None) -> float:
+    num, _, den = (r or "0/1").partition("/")
+    try:
+        return float(num) / float(den or 1) if float(den or 1) else 0.0
+    except ValueError:
+        return 0.0
+
+
+def video_timing(path: str) -> dict[str, Any]:
+    """Frame-exact timing of a file's first video stream: r_frame_rate, avg_frame_rate, packet count
+    and the stream duration, plus nb_frames/duration (the rate a player actually sees)."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries",
+                        "stream=r_frame_rate,avg_frame_rate,nb_frames,nb_read_packets,duration:format=duration",
+                        "-of", "json", path], capture_output=True, text=True)
+    try:
+        d = json.loads(r.stdout or "{}")
+    except json.JSONDecodeError:
+        d = {}
+    v = (d.get("streams") or [{}])[0]
+    frames = int(v.get("nb_read_packets") or v.get("nb_frames") or 0)
+    dur = float(v.get("duration") or (d.get("format") or {}).get("duration") or 0.0)
+    return {"r_frame_rate": v.get("r_frame_rate"), "avg_frame_rate": v.get("avg_frame_rate"),
+            "r_fps": round(_rate(v.get("r_frame_rate")), 4), "avg_fps": round(_rate(v.get("avg_frame_rate")), 4),
+            "frames": frames, "video_duration": round(dur, 6),
+            "measured_fps": round(frames / dur, 4) if dur > 0 else 0.0}
+
+
+MUX_CEILING_DBTP = -1.3   # delivery true-peak ceiling measured on the encoded AAC track (-1.0 spec, 0.3 dB margin)
+MUX_MAX_TRIES = 6         # encodes: up to 2 local trims, then whole-file gain steps
+
+
+def _local_trim(src: np.ndarray, decoded: np.ndarray, ceiling_db: float, margin_db: float = 0.2,
+                block: int = 1024) -> tuple[np.ndarray, list[dict[str, float]]]:
+    """Pull the pre-encode audio down only where the *encoded* audio overshoots: per AAC frame
+    (1024 samples) whose decoded true peak exceeds the ceiling, a raised-cosine dip of
+    (overshoot + margin) dB spanning the frame and its neighbours. Loudness is untouched."""
+    from .audio import dsp as A
+    n = min(len(src), len(decoded))
+    env = A.true_peak_env(decoded[:n])
+    ceil = 10 ** (ceiling_db / 20)
+    g = np.ones(len(src), np.float32)
+    fixes = []
+    for k in range(0, n, block):
+        pk = float(env[k:k + block].max())
+        if pk <= ceil:
+            continue
+        over = float(20 * np.log10(pk / ceil)) + margin_db
+        a, b = max(0, k - 2 * block), min(len(src), k + 3 * block)
+        w = np.hanning(b - a + 2)[1:-1].astype(np.float32)
+        w = np.minimum(1.0, w * 2.0)  # flat-topped dip
+        g[a:b] = np.minimum(g[a:b], 1 - (1 - 10 ** (-over / 20)) * w)
+        fixes.append({"t": round(k / A.SR, 4), "over_db": round(over - margin_db, 2)})
+    return (src * g[:, None]).astype(np.float32), fixes
+
+
+def mux(video: str, audio: str, out_path: str, ceiling_dbtp: float = MUX_CEILING_DBTP,
+        max_tries: int = MUX_MAX_TRIES) -> dict[str, Any]:
+    """Mux video (stream copy) + WAV -> AAC 192k MP4, then verify the delivered file.
+
+    * The output runs exactly as long as the video: audio is padded with silence (apad) and the
+      output is cut at the video duration (frames / rate). `-shortest` is not used, because when the
+      audio is a few ms short it trims the video track and the delivered rate/frame count drifts
+      (e.g. 330 frames over 10.967 s = 30.091 fps).
+    * True peak and integrated loudness are measured on the final file (ffmpeg EBU R128, after the
+      AAC encode). If the codec pushed the true peak over `ceiling_dbtp`, the pre-encode audio is
+      lowered by the overshoot (+0.2 dB) where it happens (the AAC frames that went over, found by
+      decoding the result), and re-encoded; if two local trims do not converge, the whole pre-encode
+      gain is lowered by the overshoot (+0.2 dB) per encode instead. At most `max_tries` encodes.
+    Returns the measurements; raises if the mux itself fails."""
+    from .audio import dsp as A
+    from .audio.mix import measure
+    vt = video_timing(video)
+    fps = vt["r_fps"] or vt["avg_fps"]
+    dur = vt["frames"] / fps if fps and vt["frames"] else vt["video_duration"]
+    gain_db = 0.0
+    attempts: list[dict[str, Any]] = []
+    loud: dict[str, Any] = {}
+    src_path, tmp = audio, out_path + ".trim.wav"
+    src: np.ndarray | None = None
+    try:
+        for i in range(max(1, max_tries)):
+            af = (f"volume={gain_db:.2f}dB," if gain_db else "") + "apad"
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", video, "-i", src_path,
+                   "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", af, "-c:a", "aac", "-b:a", "192k",
+                   "-ar", "48000"]
+            if dur > 0:
+                cmd += ["-t", f"{dur:.6f}"]
+            r = subprocess.run(cmd + ["-movflags", "+faststart", out_path], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError(f"mux failed: {r.stderr[-800:]}")
+            loud = measure(out_path)
+            att: dict[str, Any] = {"gain_db": round(gain_db, 2), "lufs": loud["lufs"], "true_peak": loud["true_peak"]}
+            attempts.append(att)
+            over = loud["true_peak"] - ceiling_dbtp
+            if over <= 0 or i == max_tries - 1:
+                break
+            if i < min(2, max_tries - 2):  # local fix first
+                if src is None:
+                    src = A.read_audio(audio)
+                src, fixes = _local_trim(src, A.read_audio(out_path), ceiling_dbtp - 0.1)
+                att["local_trims"] = fixes
+                if fixes:
+                    A.write_wav(tmp, src)
+                    src_path = tmp
+                    continue
+            gain_db -= over + 0.2
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    ot = video_timing(out_path)
+    want = vt["r_fps"]
+    fps_ok = bool(want and abs(ot["r_fps"] - want) < 1e-3 and abs(ot["avg_fps"] - want) < 1e-3
+                  and abs(ot["measured_fps"] - want) < 0.01 and ot["frames"] == vt["frames"])
+    return {"out": out_path, "attempts": attempts, "gain_db": round(gain_db, 2), "loudness": loud,
+            "true_peak_ok": loud.get("true_peak", 0.0) <= ceiling_dbtp, "ceiling_dbtp": ceiling_dbtp,
+            "video_in": vt, "video_out": ot, "fps_ok": fps_ok}
 
 
 def which_ffmpeg() -> None:

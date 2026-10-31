@@ -1,4 +1,4 @@
-// Kinetic type teaser: one idea per beat. Times like "3b" are beats at the music BPM.
+// Kinetic type teaser: one idea per beat, every scene one bar. Times like "4b" are beats at the music BPM.
 {
   "mode": "kinetic",
   "handle": "@kineticstudio",
@@ -10,12 +10,13 @@
     { "kind": "sfx", "at": "drop-2b", "sound": "riser_short", "gain": 2 }
   ],
   "scenes": [
-    { "type": "slam", "id": "open", "words": ["STOP", "SCROLLING", "NOW"], "dur": "3b", "accent_words": ["NOW"] },
-    { "type": "stack", "lines": ["ONE IDEA", "PER", "BEAT"], "dur": "4b" },
-    { "type": "marquee", "id": "build", "text": "MOTION", "dur": "4b", "transition": "zoom" },
-    { "type": "type3d", "text": "KINETIC", "dur": "4b" },
-    { "type": "scramble", "text": "KINETIC", "label": "STUDIO", "dur": "4b", "transition": "flash" },
-    { "type": "countdown", "from": 3, "dur": "3b", "transition": "squash" },
+    { "type": "slam", "id": "open", "words": ["STOP", "SCROLLING", "LOOK", "NOW"], "dur": "4b", "accent_words": ["NOW"] },
+    { "type": "stack", "lines": ["ONE IDEA", "PER", "BEAT"], "dur": "4b", "transition": "whip-left" },
+    { "type": "marquee", "id": "build", "text": "MOTION", "dur": "4b", "speed_beats": 200, "transition": "zoom" },
+    { "type": "type3d", "text": "KINETIC", "sub": "type in depth", "dur": "4b", "transition": "whip-up" },
+    { "type": "scramble", "text": "KINETIC", "label": "studio", "dur": "4b", "transition": "flash",
+      "lines": ["BRIEF  > BEATS", "BEATS  > MOTION", "MOTION > FRAMES", "FRAMES > LOCAL"] },
+    { "type": "countdown", "from": 4, "dur": "4b", "transition": "whip-left" },
     { "type": "burst", "id": "drop", "text": "GO", "dur": "4b", "transition": "flash" }
   ]
 }
