@@ -29,21 +29,29 @@ from __future__ import annotations
 import math
 import re
 from functools import lru_cache
-from typing import Any
+from typing import Any, ClassVar
 
+import numpy as np
 import skia
 
 from .. import draw as D
 from .. import ease as E
 from .. import fonts as F
 from .. import layout as L
-from .base import Ctx, Cue, Scene, register
+from .base import Ctx, Cue, Scene, _paper_image, register
 
 DIM = 0.45                 # dimmed words: 45 % of the text colour over the ground
 SOFT, WONK = 60.0, 1.0     # Fraunces soft corners + wonky alternates for the editorial voice
 _PUNCT = ".,!?;:…\"'“”‘’"
 _HANG = "“\"‘'«("          # opening punctuation that hangs into the left margin
 PILL_BOUNCE = 0.22         # pill / button springs: about 2 % overshoot (S5 cap is 4 %)
+NOD = 0.09                 # hook pulse: lift of the pulsing line, in em
+BREATH = 0.006             # beat breath: the type plane draws in by 0.6 % at its peak on the beat
+SETTLE = 0.02              # the type plane settles from 98 % to 100 % over each scene (a slow push)
+# optical margin alignment: round and diagonal capitals/lowercase overshoot the left edge by a
+# fraction of the em so the column reads straight (stems sit on x0, bowls and apexes just past it)
+_ROUND = "OCGQSoceqdsaÓÖ"
+_DIAG = "AVWYXvwyx"
 
 
 # ---------------------------------------------------------------------- shared helpers
@@ -76,13 +84,54 @@ def _norm(w: str) -> str:
     return w.lower().strip(_PUNCT)
 
 
+def optical_dx(f: skia.Font, word: str, tk: float, hang: bool = True) -> float:
+    """Offset for a word that starts a flush-left line so its first letter's ink, not its
+    advance box, sits on the column edge: the side bearing is removed, round letters overshoot by
+    1.2 % of the em and diagonals by 2 %; with `hang`, opening punctuation hangs into the margin
+    (the first letter after it lands on the edge)."""
+    if not word:
+        return 0.0
+    rects = D.glyph_rects(f, word, 0.0, 0.0, tk)
+    if not rects:
+        return 0.0
+    i = 0
+    if hang:
+        while i < len(rects) - 1 and rects[i][0] in _HANG:
+            i += 1
+    ch, r = rects[i]
+    size = f.getSize()
+    dx = -r.left()
+    if ch in _ROUND:
+        dx -= 0.012 * size
+    elif ch in _DIAG:
+        dx -= 0.02 * size
+    return dx
+
+
+def ink_extent(f: skia.Font) -> tuple[float, float]:
+    """(ascender, descender) ink depth of the face at this size, from the tallest ascenders and
+    the deepest descenders (b d f h k l / g j p q y), so a box sized with it holds any word."""
+    gl = f.textToGlyphs("bdfhklgjpqy")
+    bounds = f.getBounds(gl)
+    return -min(b.top() for b in bounds), max(b.bottom() for b in bounds)
+
+
+def frame_time(ctx: Ctx) -> float:
+    """Scene-local time of the delivered frame this sample belongs to. Readouts that change every
+    frame (timers, counters) use it so every motion-blur sub-sample of a frame shows the same
+    value (otherwise the shutter averages two different digits into one double exposure)."""
+    fps = max(float(ctx.fps), 1.0)
+    return math.floor(_film_t(ctx) * fps + 0.5) / fps - ctx.start
+
+
 def _creator(ctx: Ctx) -> dict[str, str]:
     film = ctx.film
     if film is None:
         return {}
     cr = dict(film.spec.get("creator") or {})
-    if not cr and getattr(film, "handle", ""):
-        cr = {"handle": film.handle}
+    legacy = str(film.spec.get("handle") or "")
+    if not cr and legacy:
+        cr = {"handle": legacy}
     if not cr:
         return {}
     name = str(cr.get("name") or cr.get("handle", "").lstrip("@"))
@@ -116,9 +165,16 @@ def _film_t(ctx: Ctx) -> float:
     return ctx.start + ctx.lt
 
 
+def _frame_film_t(ctx: Ctx) -> float:
+    """Film time of the delivered frame (see frame_time): one value for all its sub-samples."""
+    return frame_time(ctx) + ctx.start
+
+
 def _beat_pulse(ctx: Ctx, every: float = 1.0, decay: float = 0.5) -> float:
-    """1 on each `every`-beat grid line of the film, decaying out_expo over `decay` beats."""
-    b = ctx.tl.time_to_beat(_film_t(ctx)) / every
+    """1 on each `every`-beat grid line of the film, decaying out_expo over `decay` beats. Read
+    once per delivered frame: the attack is a step, and sub-samples on both sides of it would
+    blend lit and unlit states into a ghost that the compositor's smear drags sideways."""
+    b = ctx.tl.time_to_beat(_frame_film_t(ctx)) / every
     f = (b - math.floor(b)) * every
     return 1.0 - E.out_expo(E.clamp(f / max(decay, 1e-3)))
 
@@ -167,16 +223,18 @@ def draw_header(ctx: Ctx, scene: Scene, alpha: float = 1.0) -> float:
     c = ctx.c
     d = g.px(88)
     top = g.safe_top
-    cx, cy = g.x0 + d / 2, top + d / 2
+    ring_r = d / 2 + g.px(7)
+    outer = ring_r + g.px(1.5)  # the ring's outer edge sits on x0 and on the safe line
+    cx, cy = g.x0 + outer, top + outer
     c.drawCircle(cx, cy, d / 2, D.paint(ctx.pal("accent", alpha)))
-    c.drawCircle(cx, cy, d / 2 + g.px(7), D.paint(dim_color(ctx, "accent", 0.55, alpha), stroke=g.px(3)))
+    c.drawCircle(cx, cy, ring_r, D.paint(dim_color(ctx, "accent", 0.55, alpha), stroke=g.px(3)))
     fi = _serif(ctx, g.px(40), 800)
     D.draw_text(c, cr["initials"], cx, cy, fi, ctx.pal("ink_dark", alpha), valign="middle")
     cap_r = L.TYPE["caption"]
     fn = cap_r.font(ctx, weight=700)
     meta = L.TYPE["meta"]
     fm = meta.font(ctx, weight=500)
-    tx = g.x0 + d + g.px(28)
+    tx = g.x0 + 2 * outer + g.px(20)
     D.draw_text(c, cr["name"], tx, cy - g.px(6), fn, ctx.pal("ink", alpha), align="left", tracking=cap_r.tk(ctx))
     sub = "  ·  ".join(x for x in (cr["handle"], cr["series"]) if x)
     if sub:
@@ -185,7 +243,7 @@ def draw_header(ctx: Ctx, scene: Scene, alpha: float = 1.0) -> float:
     i, n = _scene_index(ctx, scene)
     D.draw_text(c, f"{i:02d}/{n:02d}", g.x1, cy + D.cap_height(fm) / 2, fm, dim_color(ctx, "ink", 0.62, alpha),
                 align="right", tracking=meta.tk(ctx))
-    return top + d
+    return top + 2 * outer
 
 
 def chrome_top(ctx: Ctx) -> float:
@@ -198,10 +256,11 @@ def chrome_top(ctx: Ctx) -> float:
 def draw_chrome(ctx: Ctx, scene: Scene, label: str = "") -> None:
     """Bottom chrome on the safe line: story progress segments (one per scene, filling with
     film time), the scene label on the left and a bar counter (4 dots, current beat lit) on
-    the right."""
+    the right. Everything here is read once per delivered frame (the lit dot and the bar
+    number step on the beat)."""
     g = _g(ctx)
     c = ctx.c
-    t = _film_t(ctx)
+    t = _frame_film_t(ctx)
     h = g.bl(1)
     y1 = g.safe_bottom
     film = ctx.film
@@ -233,12 +292,12 @@ def draw_chrome(ctx: Ctx, scene: Scene, label: str = "") -> None:
     step = g.px(26)
     cy = base - D.cap_height(fm) / 2
     for k in range(bpb):
-        xk = g.x1 - r - (bpb - 1 - k) * step
+        xk = g.x1 - r * 1.45 - (bpb - 1 - k) * step  # the pulsing dot peaks at 1.45 r, on x1
         on = k == cur
         rr = r * (1.0 + 0.45 * pulse) if on else r * 0.75
         c.drawCircle(xk, cy, rr, D.paint(ctx.pal("accent") if on else dim_color(ctx, "ink", 0.4)))
     wtxt = f"BAR {ctx.tl.bar_of(t):02d}"
-    D.draw_text(c, wtxt, g.x1 - 2 * r - (bpb - 1) * step - g.px(22), base, fm, dim_color(ctx, "ink", 0.7),
+    D.draw_text(c, wtxt, g.x1 - 2.45 * r - (bpb - 1) * step - g.px(22), base, fm, dim_color(ctx, "ink", 0.7),
                 align="right", tracking=meta.tk(ctx))
 
 
@@ -314,7 +373,8 @@ def _balance(widths: tuple[float, ...], gap: float, max_w: float) -> tuple[int, 
 
 def set_words(ctx: Ctx, words: list[str], size: Any, max_w: float, max_lines: int, weight: float = 650,
               min_ref: float = 95.0, gap_em: float = 0.0, top: float = 0.0, x: float | None = None,
-              soft: float = SOFT, hang: bool = True) -> tuple[skia.Font, float, list[tuple[str, float, float, float, int]]]:
+              soft: float = SOFT, hang: bool = True, leading: float | None = None
+              ) -> tuple[skia.Font, float, list[tuple[str, float, float, float, int]]]:
     """Set `words` flush left from `x` (default x0) with the cap top of line 1 at `top`.
 
     The role size (default title 126) shrinks towards `min_ref` only when the text needs more
@@ -338,7 +398,7 @@ def set_words(ctx: Ctx, words: list[str], size: Any, max_w: float, max_lines: in
             break
         ref = max(lo, ref * 0.94)
     cap = D.cap_height(f)
-    pitch = px * role.leading
+    pitch = px * (role.leading if leading is None else leading)
     boxes = []
     li, xx = 0, x
     bset = set(brk)
@@ -347,8 +407,8 @@ def set_words(ctx: Ctx, words: list[str], size: Any, max_w: float, max_lines: in
             li += 1
             xx = x
         wx = xx
-        if hang and wx == x and w and w[0] in _HANG:
-            wx -= D.text_w(f, w[0], tk)
+        if i == 0 or i in bset:  # line start: optical margin alignment (+ hanging punctuation)
+            wx += optical_dx(f, w, tk, hang)
         boxes.append((w, wx, top + cap + li * pitch, ww, li))
         xx = wx + ww + gap
     return f, tk, boxes
@@ -388,7 +448,10 @@ def draw_speaker(ctx: Ctx, person: dict[str, str], top: float, u: float, speakin
     tx = g.x0 + g.px(24) + d + g.px(28)
     tw = max(D.text_w(fn, person["name"], cap_r.tk(ctx)), D.text_w(fm, person.get("role", ""), meta.tk(ctx)))
     bars_w = g.px(60)
-    w = min(g.content_w, tx - g.x0 + tw + g.px(40) + bars_w + g.px(28))
+    need = tx - g.x0 + tw + g.px(40) + bars_w + g.px(28)
+    # on the grid: the plate ends on a column edge and its top sits on the baseline grid
+    w = next((g.col_end(k) - g.x0 for k in range(g.cols) if g.col_end(k) - g.x0 >= need), g.content_w)
+    top = g.snap(top)
     c.save()
     c.clipRect(skia.Rect(g.x0 - g.px(4), top - g.px(30), g.x0 + w * u + g.px(4), top + h + g.px(30)))
     plate = D.mix_rgb(ctx.pal.rgb("bg"), ctx.pal.rgb("ink"), 0.09) if not on_light else ctx.pal.rgb("paper")
@@ -416,12 +479,45 @@ def draw_speaker(ctx: Ctx, person: dict[str, str], top: float, u: float, speakin
 
 class SocialScene(Scene):
     """Shared base: social scenes default to the paper ground (scene param `ground_style`)."""
-    defaults: dict[str, Any] = {"ground_style": "paper", "backdrop": True}
+    defaults: ClassVar[dict[str, Any]] = {"ground_style": "paper", "backdrop": True}
 
     def __init__(self, params: dict[str, Any], start: float, dur: float, tl: Any, mode_cfg: dict):
         super().__init__(params, start, dur, tl, mode_cfg)
         if self.ground_style is None:
             self.ground_style = self.p_raw.get("ground_style")
+
+    def plane_scale(self, ctx: Ctx) -> float:
+        """Scale of the type plane about the frame centre, always <= 1 so the grid lines are the
+        outer limit: it settles from 1 - SETTLE to 1 over the scene (in_out_sine, a slow push that
+        lands on the grid at the cut) and breathes in by BREATH on every beat (it draws in over
+        the last quarter beat into the beat, peak on the grid line, and lets go over the next
+        three quarters, in_out_sine both ways: no step inside any frame's shutter)."""
+        b = ctx.tl.time_to_beat(ctx.t)
+        f = b - math.floor(b)
+        env = 1.0 - E.in_out_sine(f / 0.75) if f < 0.75 else E.in_out_sine((f - 0.75) / 0.25)
+        settle = E.in_out_sine(E.clamp(ctx.lt / max(self.dur, 1e-6)))
+        return 1.0 - SETTLE * (1.0 - settle) - BREATH * env
+
+    def pin_type_plane(self, ctx: Ctx) -> None:
+        """Take the type plane off the scene camera: concat the inverse of the camera (push,
+        drift, shake and any tilt; the ground and the backdrop keep it, so they move behind the
+        type as a parallax plate) and then plane_scale(). Header, copy and chrome therefore
+        never cross the 96 px margins or the 220 / 1540 safe lines, whatever the camera does.
+        Transition transforms applied around the scene still carry the plane with its shot.
+        No-op when the scene's camera is off."""
+        cam = ctx.cam
+        if cam is None:
+            return
+        c = ctx.c
+        t = cam.tilt()
+        if t is not None:
+            m = np.array([[t.rc(r, k) for k in range(4)] for r in range(4)], dtype=float)
+            if abs(float(np.linalg.det(m))) > 1e-12:
+                c.concat(skia.M44.Rows(*[skia.V4(*(float(v) for v in row)) for row in np.linalg.inv(m)]))
+        inv = skia.Matrix()
+        if cam.matrix(1.0).invert(inv):
+            c.concat(inv)
+        _scale_about(c, ctx.W / 2, ctx.H / 2, self.plane_scale(ctx))
 
     def _bt0(self) -> float:
         return self.tl.time_to_beat(self.start)
@@ -447,8 +543,11 @@ class SocialScene(Scene):
         return m
 
     def backdrop(self, ctx: Ctx) -> None:
+        """Backdrop light on the camera, then the type plane pinned to the grid (every social
+        scene calls this first in draw())."""
         if self.p.get("backdrop", True):
             draw_backdrop(ctx)
+        self.pin_type_plane(ctx)
 
 
 # ---------------------------------------------------------------------- hook
@@ -464,10 +563,11 @@ class Hook(SocialScene):
     get a hand-drawn swash underline drawn on the 8th after they land. The first line is
     already on screen at frame 0. `timer` shows a running seconds readout on the kicker line.
     SFX: an impact + hit on the first line, a thud (display) or soft pop (smaller roles) on
-    every other line, all on the beat."""
+    every other line, all on the beat; with `riser` (default on, scenes of 4+ beats) a short
+    riser ends exactly on the outgoing cut."""
     defaults = {**SocialScene.defaults, "lines": ["Two", "seconds.", "That is all", "you get."], "kicker": "",
                 "roles": [], "emphasis": [], "stagger": "1b", "first": "0b", "weight": 760, "timer": True, "label": "hook",
-                "mark": 2.0}
+                "mark": 2.0, "pulse": True, "riser": True}
 
     def _meter(self, ctx: Ctx) -> None:
         """Watch-time meter in the lower third: a large mono seconds readout over a ruler with
@@ -491,8 +591,12 @@ class Hook(SocialScene):
             big = meta.font(ctx, weight=500, size=g.px(96))
             room = g.content_w - D.text_w(f0, r0["text"], r0["tk"]) - g.px(48)
             if D.text_w(big, "0.00s", -0.02) <= room:
-                D.draw_text(c, f"{lt:0.2f}s", g.x1, r0["base"], big,
-                            ctx.pal("ink") if lt < mark else ctx.pal("accent2"), align="right", tracking=-0.02)
+                # one value per delivered frame (mono = tabular figures): every shutter sub-sample
+                # of the frame draws the same digits, so the roll never double-exposes
+                ft = max(frame_time(ctx), 0.0)
+                D.draw_text(c, f"{ft:0.2f}s", g.x1, r0["base"], big,
+                            ctx.pal("ink") if ft < mark - 1e-9 else ctx.pal("accent2"), align="right",
+                            tracking=-0.02)
         D.draw_text(c, "SECONDS WATCHED", g.x0, y_num, fm, dim_color(ctx, "ink", 0.7), align="left",
                     tracking=meta.tk(ctx))
         c.drawRect(skia.Rect(g.x0, y_rule - g.px(2), g.x1, y_rule + g.px(2)), D.paint(dim_color(ctx, "ink", 0.25)))
@@ -500,7 +604,8 @@ class Hook(SocialScene):
         n8 = int(round(self.tl.beats_of(span, self.start) * 2))
         e8 = _beat_pulse(ctx, 0.5, 0.35)
         for k in range(n8 + 1):
-            x = g.x0 + w * k / max(n8, 1)
+            # tick centres run from x0 + 1.5 px to x1 - 1.5 px: the end ticks sit inside the margin
+            x = g.x0 + g.px(1.5) + (w - g.px(3)) * k / max(n8, 1)
             past = k / max(n8, 1) <= prog + 1e-6
             hh = g.px(18 if k % 2 == 0 else 10)
             if past and abs(k / max(n8, 1) - prog) < 0.5 / max(n8, 1):
@@ -541,7 +646,89 @@ class Hook(SocialScene):
                 out.append(Cue("sfx", t, data={"sound": "thud", "gain": -6.0}))
             else:
                 out.append(Cue("sfx", t, data={"sound": "pop_soft", "gain": -7.0}))
+        emph = {_norm(e) for e in self.p["emphasis"]}
+        lines = self._lines()
+        for b, i in self.pulse_beats():
+            t = self.bt(b)
+            hot = any(_norm(w) in emph for w in lines[i]["text"].split())
+            out.append(Cue("sfx", t, data={"sound": "pop_soft" if hot else "tick", "gain": -8.0 if hot else -10.0,
+                                            "velocity": 0.55}))
+        if self.p.get("riser", True) and self.tl.beats_of(self.dur, self.start) >= 4 - 1e-6:
+            out.append(Cue("sfx", self.dur, data={"sound": "riser_short", "gain": -10.0, "align": "end"}))
         return out
+
+    def pulse_beats(self) -> list[tuple[int, int]]:
+        """(scene beat, line index) of the weight pulses that run down the stack, one line per
+        beat, once every line has landed (`pulse`: true) until the end of the scene."""
+        if not self.p.get("pulse", True):
+            return []
+        ons = self.onsets()
+        n = len(self._lines())
+        if not n or not ons:
+            return []
+        b0 = int(math.floor(self.tl.beats_of(ons[-1], self.start) + 1e-6)) + 1
+        nb = int(round(self.tl.beats_of(self.dur, self.start)))
+        return [(b, (b - b0) % n) for b in range(b0, nb)]
+
+    def _pulse(self, lt: float, i: int) -> float:
+        """0..1 weight pulse of line i: full on its beat, out_cubic back over 3/4 beat."""
+        lb = self._beat_of(lt)
+        best = None
+        for b, k in self.pulse_beats():
+            if k == i and b <= lb + 1e-9:
+                best = b
+        if best is None:
+            return 0.0
+        return 1.0 - E.out_cubic(E.clamp((lb - best) / 0.75))
+
+    def marker_at(self, lt: float) -> list[tuple[int, float, float]]:
+        """Highlighter strokes that read down the stack with the pulses, as (line, from, to)
+        fractions of the line width: on each pulse beat a stroke is laid across the pulsing
+        line over the whole beat (in_out_sine) while the previous line's stroke lifts off left
+        to right over the first half of the same beat."""
+        lb = self._beat_of(lt)
+        pb = self.pulse_beats()
+        out: list[tuple[int, float, float]] = []
+        for k, (b, i) in enumerate(pb):
+            if not b <= lb < b + 1:
+                continue
+            out.append((i, 0.0, E.in_out_sine(E.clamp(lb - b))))
+            if k > 0:
+                lift = E.in_out_sine(E.clamp((lb - b) / 0.5))
+                if lift < 1.0:
+                    out.append((pb[k - 1][1], lift, 1.0))
+        return out
+
+    def _marker(self, ctx: Ctx, rows: list[dict[str, Any]]) -> None:
+        """Paint marker_at(): accent2 at 50 %, the lower half of the x-height plus a little below the baseline, from the content edge to just past
+        the end of the line, so the eye is led down the stack on the beat."""
+        if not rows:
+            return
+        g = _g(ctx)
+        w1 = float(self.p["weight"])
+        pad = g.px(16)
+        for i, a, b in self.marker_at(ctx.lt):
+            if i >= len(rows) or b <= a:
+                continue
+            r = rows[i]
+            f = _serif(ctx, r["px"], w1, soft=0)
+            end = min(g.x0 + D.text_w(f, r["text"], r["tk"]) + pad, g.x1)
+            base, cap = r["base"] - self._nod(ctx.lt, i) * r["px"] * NOD, r["cap"]  # rides with the nod
+            span = end - g.x0
+            ctx.c.drawRect(skia.Rect(g.x0 + span * a, base - cap * 0.52, g.x0 + span * b, base + cap * 0.12),
+                           D.paint(ctx.pal("accent2", 0.5)))
+
+    def _nod(self, lt: float, i: int) -> float:
+        """0..1 lift of line i on its pulse beat: up over the first 1/6 beat (out_cubic), back
+        down over the rest of the beat (in_out_sine), so the line nods once per beat."""
+        lb = self._beat_of(lt)
+        for b, k in self.pulse_beats():
+            if k == i and b <= lb < b + 1:
+                f = lb - b
+                if f < 1 / 6:
+                    return E.out_cubic(f * 6)
+                return 1.0 - E.in_out_sine((f - 1 / 6) / (5 / 6))
+        return 0.0
 
     def _roles_ref(self) -> list[float]:
         """Reference px per line (auto roles assume a 888 px measure at the final weight)."""
@@ -550,6 +737,18 @@ class Hook(SocialScene):
             r = ln["role"]
             out.append(L.TYPE[r].size if r in L.TYPE else 0.0)
         return out
+
+    def _pulse_max(self, ctx: Ctx, row: dict[str, Any]) -> float:
+        """Heaviest weight (<= 900) at which the line still fits the content width."""
+        g = _g(ctx)
+        w1 = float(self.p["weight"])
+        for wt in (900.0, 860.0, 820.0, 780.0):
+            if wt <= w1:
+                break
+            f = _serif(ctx, row["px"], wt, soft=0)
+            if D.text_w(f, row["text"], row["tk"]) <= g.content_w:
+                return wt
+        return w1
 
     def layout(self, ctx: Ctx) -> list[dict[str, Any]]:
         g = _g(ctx)
@@ -597,46 +796,52 @@ class Hook(SocialScene):
         emph = {_norm(e) for e in self.p["emphasis"]}
         land = spb / 3
         w0, w1 = 280.0, float(self.p["weight"])
-        for i, (row, t0) in enumerate(zip(self.layout(ctx), self.onsets())):
+        rows = self.layout(ctx)
+        self._marker(ctx, rows)
+        for i, (row, t0) in enumerate(zip(rows, self.onsets())):
             u = (lt - t0) / land + (0.55 if i == 0 else 0.0)  # the first line is already rising at frame 0
             if u <= 0:
                 continue
             e = E.out_expo(E.clamp(u))
             ax = E.out_expo(E.clamp((lt - t0) / (spb * 0.5) + (0.35 if i == 0 else 0.0)))
             wt = round((w0 + (w1 - w0) * ax) / 20.0) * 20.0
-            f = _serif(ctx, row["px"], wt, soft=100.0 * (1 - ax))
             base, px = row["base"], row["px"]
+            pk = self._pulse(lt, i)
+            if pk > 0:  # the weight axis kicks to the heaviest cut that still fits the measure
+                wt = round((w1 + (self._pulse_max(ctx, row) - w1) * pk) / 20.0) * 20.0
+            f = _serif(ctx, px, wt, soft=100.0 * (1 - ax))
             asc = px * 1.0
             c.save()
             c.clipRect(skia.Rect(g.x0 - px * 0.3, base - asc, ctx.W + px, base + px * 0.32))
-            y = base + (1 - e) * px * 1.05
-            xx = g.x0
+            y = base + (1 - e) * px * 1.05 - self._nod(lt, i) * px * NOD
             sp = D.text_w(f, " ", row["tk"])
             words = row["text"].split()
+            xx = g.x0 + optical_dx(f, words[0], row["tk"]) if words else g.x0
             for w in words:
                 ww = D.text_w(f, w, row["tk"])
                 col = ctx.pal("accent") if _norm(w) in emph else ctx.pal("ink")
-                if xx == g.x0 and w[0] in _HANG:
-                    xx -= D.text_w(f, w[0], row["tk"])
                 D.draw_text(c, w, xx, y, f, col, align="left", tracking=row["tk"])
                 xx += ww + sp
             c.restore()
             # swash under emphasis words: drawn on the 8th after the landing
-            xx = g.x0
             fw = _serif(ctx, px, w1, soft=0)
+            xx = g.x0 + optical_dx(fw, words[0], row["tk"]) if words else g.x0
             sp1 = D.text_w(fw, " ", row["tk"])
             for w in words:
                 ww = D.text_w(fw, w, row["tk"])
                 if _norm(w) in emph:
                     su = E.out_quint(E.clamp((lt - t0 - spb * 0.5) / (spb * 0.5)))
                     if su > 0:
-                        x0, x1 = xx + px * 0.02, xx + ww * 0.98
-                        yy = base + px * 0.11
+                        # the round cap (half the stroke) starts on x0, not in the margin
+                        x0, x1 = max(xx + px * 0.02, g.x0 + px * 0.03), xx + ww * 0.98
+                        # kept within 0.17 em of the baseline so the line below (and its nod)
+                        # never meets the curl
+                        yy = base + px * 0.08
                         p = skia.Path()
-                        p.moveTo(x0, yy + px * 0.03)
-                        p.cubicTo(x0 + (x1 - x0) * 0.3, yy - px * 0.05, x0 + (x1 - x0) * 0.62, yy + px * 0.07, x1, yy - px * 0.02)
-                        p.cubicTo(x1 - (x1 - x0) * 0.25, yy + px * 0.02, x1 - (x1 - x0) * 0.55, yy + px * 0.10,
-                                  x1 - (x1 - x0) * 0.72, yy + px * 0.09)
+                        p.moveTo(x0, yy + px * 0.02)
+                        p.cubicTo(x0 + (x1 - x0) * 0.3, yy - px * 0.03, x0 + (x1 - x0) * 0.62, yy + px * 0.04, x1, yy - px * 0.015)
+                        p.cubicTo(x1 - (x1 - x0) * 0.25, yy + px * 0.012, x1 - (x1 - x0) * 0.55, yy + px * 0.06,
+                                  x1 - (x1 - x0) * 0.72, yy + px * 0.055)
                         c.drawPath(D.partial_path(p, su), D.paint(ctx.pal("accent2"), stroke=px * 0.055))
                 xx += ww + sp1
         draw_chrome(ctx, self, self.p.get("label") or "hook")
@@ -648,8 +853,8 @@ class Hook(SocialScene):
 class Quote(SocialScene):
     """Pull-quote card revealed word by word on the 8th grid.
 
-    A paper card (bleeding to half the margin) rises in out_expo over 1/2 beat with a 2 degree
-    settle. Inside, the kicker sits on the shared anchor and the quote is set in Fraunces at the
+    A paper sheet (full bleed left and right, with a paper tooth texture under the film grain)
+    rises in out_expo over 1/2 beat with a 2 degree settle and lands with a soft thud. Inside, the kicker sits on the shared anchor and the quote is set in Fraunces at the
     title role (126 px, down to 95 px for long quotes; light weight, optical size from the px
     size) flush left on x0 with the opening quote mark hanging into the margin. A large ghost
     quote mark sits top right, behind the text. Each word mask-rises from below its line over one
@@ -667,6 +872,13 @@ class Quote(SocialScene):
 
     def _words(self) -> list[str]:
         return str(self.p["text"]).split()
+
+    def shutter(self, lt: float) -> float:
+        """A narrow shutter (54 degrees) while the sheet lands on the cut: it rises out_expo, so
+        its first frames move fastest, and a full smear would melt the kicker and the first word
+        into the paper; from the 8th on the mode shutter returns."""
+        m = super().shutter(lt)
+        return min(m, 0.3) if self.p["card"] and lt < self.beat_len * 0.5 else m
 
     @property
     def measure_ok(self) -> bool:
@@ -707,6 +919,8 @@ class Quote(SocialScene):
         out = []
         spb = self.beat_len
         emph = {_norm(e) for e in self.p["emphasis"]}
+        if self.p["card"]:  # the sheet lands on the cut
+            out.append(Cue("sfx", 0.0, data={"sound": "thud", "gain": -9.0, "velocity": 0.6}))
         if self.p["ticks"]:
             for w, t in zip(self._words(), self.onsets()):
                 if t > 1e-6 and t < self.dur and self._on_beat(t):
@@ -721,19 +935,17 @@ class Quote(SocialScene):
         return out
 
     def card_rect(self, ctx: Ctx) -> skia.Rect:
+        """The paper sheet: full bleed left and right (past the frame edge, so the settle rotation
+        and the push-in never show a side edge), from just above the kicker to above the chrome."""
         g = _g(ctx)
-        bleed = g.margin / 2
-        return skia.Rect(bleed, g.anchor_y - g.bl(9), ctx.W - bleed, chrome_top(ctx) - g.bl(7))
+        over = g.px(72)
+        return skia.Rect(-over, g.anchor_y - g.bl(9), ctx.W + over, chrome_top(ctx) - g.bl(7))
 
     def layout(self, ctx: Ctx) -> tuple[skia.Font, float, list]:
         g = _g(ctx)
         fk, _ = kicker_font(ctx)
         top = g.anchor_y + D.cap_height(fk) + g.bl(8)
-        if self.p["card"]:
-            r = self.card_rect(ctx)
-            max_w = r.right() - g.px(64) - g.x0
-        else:
-            max_w = g.content_w
+        max_w = g.content_w
         f, tk, boxes = set_words(ctx, self._words(), self.p["size"], max_w, int(self.p["max_lines"]),
                                  float(self.p["weight"]), top=top, soft=40.0)
         return f, tk, boxes
@@ -746,35 +958,46 @@ class Quote(SocialScene):
         self.backdrop(ctx)
         draw_header(ctx, self)
         ground = "paper" if card else "bg"
-        ink = ctx.pal("ink_dark") if card else ctx.pal("ink")
         ink_key = "ink_dark" if card else "ink"
 
         # card: rises out_expo over 1/2 beat with a small rotation settle (a physical sheet)
         cu = E.out_expo(E.clamp((lt + ctx.frame) / (spb * 0.5)))
         rect = self.card_rect(ctx)
         c.save()
-        # once the quote is read and signed, the card pushes in towards the outgoing cut
-        # (accelerating under the riser): up to 7 % about the card centre
+        # once the quote is read and signed, the sheet and the quote push in towards the outgoing
+        # cut (accelerating under the riser): the sheet up to 7 % about its centre (it is full
+        # bleed), the quote up to 7 % about its left edge (x0), so the type stays inside x1 and
+        # the hanging quote mark keeps hanging; kicker, ghost mark and byline hold on the grid
         p0 = self._push_at()
+        push = 1.0
         if lt > p0 and self.dur > p0:
             pu = E.clamp((lt - p0) / (self.dur - p0))
-            _scale_about(c, rect.centerX(), rect.centerY(), 1.0 + 0.07 * (0.45 * pu + 0.55 * pu * pu))
+            push = 1.0 + 0.07 * (0.45 * pu + 0.55 * pu * pu)
         if card:
             c.translate(0, (1 - cu) * g.bl(30))
             piv = (rect.centerX(), rect.bottom())
             c.translate(*piv)
             c.rotate(-2.0 * (1 - cu))
             c.translate(-piv[0], -piv[1])
-            rad = g.px(36)
-            sh = skia.Rect(rect.left(), rect.top() + g.bl(3), rect.right(), rect.bottom() + g.bl(4))
-            c.drawRRect(skia.RRect.MakeRectXY(sh, rad, rad), D.paint(D.argb((0, 0, 0), 0.5), blur=g.px(28)))
-            c.drawRRect(skia.RRect.MakeRectXY(rect, rad, rad), D.paint(ctx.pal("paper")))
             c.save()
-            c.clipRRect(skia.RRect.MakeRectXY(rect, rad, rad), doAntiAlias=True)
-            # ghost quote mark, top right behind the text (lands on beat 0)
+            _scale_about(c, rect.centerX(), rect.centerY(), push)
+            sh = skia.Rect(rect.left(), rect.top() + g.bl(3), rect.right(), rect.bottom() + g.bl(4))
+            c.drawRect(sh, D.paint(D.argb((0, 0, 0), 0.5), blur=g.px(28)))
+            c.drawRect(rect, D.paint(ctx.pal("paper")))
+            c.clipRect(rect, doAntiAlias=True)
+            # paper tooth: a fibre/noise field in the sheet's own tones (the film grain sits on top)
+            paper = ctx.pal.rgb("paper")
+            tooth = D.mix_rgb(paper, ctx.pal.rgb("ink_dark"), 0.07)
+            img = _paper_image(max(16, ctx.W // 3), max(16, ctx.H // 3), paper, tooth, 11)
+            c.drawImageRect(img, skia.Rect(rect.left(), rect.top() - g.px(40), rect.right(), rect.bottom() + g.px(40)),
+                            skia.SamplingOptions(skia.FilterMode.kLinear), D.paint(0xFFFFFFFF))
+            c.restore()
+            c.save()
+            c.clipRect(rect, doAntiAlias=True)
+            # ghost quote mark, top right behind the text (lands on beat 0), right edge on x1
             qf = _serif(ctx, g.px(560), 800, soft=100)
             qa = E.out_expo(E.clamp((lt + ctx.frame) / (spb * 0.75)))
-            qx, qy = rect.right() - g.px(40), rect.top() + g.px(400)
+            qx, qy = g.x1, rect.top() + g.px(400)
             c.save()
             c.translate(qx, qy)
             c.rotate(8.0 * (1 - qa))
@@ -794,8 +1017,10 @@ class Quote(SocialScene):
         cap = D.cap_height(f)
         size = f.getSize()
         ons = self.onsets()
-        emph = {_norm(e) for e in self.p["emphasis"]}
         ex0 = self._exit_at()
+        c.save()
+        if boxes and push > 1.0:
+            _scale_about(c, g.x0, (boxes[0][2] - cap + boxes[-1][2]) / 2, push)
 
         def out_u(li: int) -> float:
             if not self.p["exit"]:
@@ -805,7 +1030,7 @@ class Quote(SocialScene):
         # highlighter fill behind emphasis words: the editor's mark-up once the quote has been read,
         # one emphasis word per 8th from the 8th after the byline, each sweeping left -> right
         marks = self._mark_times()
-        for k, (w, x, base, ww, li) in enumerate(boxes):
+        for k, (_w, x, base, ww, li) in enumerate(boxes):
             if k not in marks:
                 continue
             hu = E.out_cubic(E.clamp((lt - marks[k]) / (spb * 0.5)))
@@ -837,6 +1062,7 @@ class Quote(SocialScene):
             c.clipRect(skia.Rect(x - size * 0.6, base - size * 1.0, x + ww + size * 0.6, base + size * 0.32))
             D.draw_text(c, w, x, base + dy, fw, col, align="left", tracking=tk)
             c.restore()
+        c.restore()
 
         # byline on the card's bottom edge: hairline, speaker avatar, name, role
         at = self._attr_at()
@@ -847,7 +1073,7 @@ class Quote(SocialScene):
             if card:
                 d = g.px(96)
                 yb = rect.bottom() - g.px(48) - d
-                c.drawRect(skia.Rect(g.x0, yb - g.bl(5) - g.px(1), g.x0 + (rect.right() - g.px(48) - g.x0) * au,
+                c.drawRect(skia.Rect(g.x0, yb - g.bl(5) - g.px(1), g.x0 + g.content_w * au,
                                      yb - g.bl(5) + g.px(1)), D.paint(dim_color(ctx, "ink_dark", 0.25, ground="paper")))
                 c.save()
                 c.translate(0, (1 - au) * g.bl(4))
@@ -865,7 +1091,7 @@ class Quote(SocialScene):
                                 dim_color(ctx, "ink_dark", 0.6, au, ground="paper"), align="left",
                                 tracking=meta.tk(ctx))
                 if self.p["meta"]:
-                    D.draw_text(c, str(self.p["meta"]).upper(), rect.right() - g.px(48), cy + D.cap_height(fm) / 2,
+                    D.draw_text(c, str(self.p["meta"]).upper(), g.x1, cy + D.cap_height(fm) / 2,
                                 fm, dim_color(ctx, "ink_dark", 0.6, au, ground="paper"), align="right",
                                 tracking=meta.tk(ctx))
                 c.restore()
@@ -888,11 +1114,12 @@ class Karaoke(SocialScene):
     onset to the 8th grid; explicit "words": [{"w": "word", "t": 1.25}, ...] (scene seconds or
     "2b") are used as given.
 
-    Highlight: an accent pill is the "now" marker. On each word's onset its leading edge sweeps
-    across the word (out_cubic over 85 % of the word's slot), filling it left to right (the
-    text inside the pill turns dark), while its tail springs off the previous word (spring, about
-    2 % overshoot). The active word scales 1.0 -> 1.08 (out_expo, 1/4 beat) and settles back
-    when the next word lands. Spoken words keep the text colour; upcoming words are dimmed to
+    Highlight: an accent pill is the "now" marker, one word at a time. On each word's onset it
+    lands holding the whole word (advance box, ascender to descender ink, plus padding; the
+    text inside turns dark) and its padding springs open over 2/5 beat (about 2 % overshoot),
+    while the previous word's pill deflates and fades within one frame; it never spans two
+    words. The active word scales 1.0 -> 1.08 (out_expo, 2/5 beat) and settles back when the
+    next word lands. Spoken words keep the text colour; upcoming words are dimmed to
     45 % of it; spoken emphasis words turn accent and pulse on every `pulse` (default 1/2 beat).
     Pages enter out_expo and leave in_quart in the last 1/4 beat before the next page.
 
@@ -910,6 +1137,10 @@ class Karaoke(SocialScene):
     beat_params = ("pulse",)
     GAP_EM = 0.30          # word space wide enough for a 1.08 x active word and its pill
     PAD = 0.09             # pill padding (em)
+    PAD_V = 0.07           # pill padding above the ascenders / below the descenders (em)
+    LEADING = 1.24         # line pitch (em): room for a pill that holds descenders between lines
+    RISE = 0.4             # pill spring / word scale-up, in beats (an 8th is 1/2 beat)
+    POP = 1.08             # active word scale
 
     # -- timing ---------------------------------------------------------------
     def _word_list(self) -> list[str]:
@@ -994,10 +1225,23 @@ class Karaoke(SocialScene):
         return g.anchor_y + D.cap_height(fk) + g.bl(8)
 
     def _page_layout(self, ctx: Ctx, page: list[int], words: list[str]) -> tuple[skia.Font, float, list]:
+        """Set the page so the pill, not just the ink, stays inside the margins: the measure is
+        narrowed by the pill's side padding (at the 1.08 pop) and the block is nudged right until
+        the first word's pill starts on x0, so the highlight lines up with the kicker rule."""
         g = _g(ctx)
         gap = float(self.p["gap"]) or self.GAP_EM
-        return set_words(ctx, [words[i] for i in page], self.p["size"], g.content_w, int(self.p["max_lines"]),
-                         float(self.p["weight"]), gap_em=gap, top=self._block_top(ctx))
+        sel = [words[i] for i in page]
+        args = (self.p["size"],)
+        kw: dict[str, Any] = {"gap_em": gap, "top": self._block_top(ctx), "leading": self.LEADING}
+        f, _tk, _b = set_words(ctx, sel, *args, g.content_w, int(self.p["max_lines"]), float(self.p["weight"]), **kw)
+        pad = f.getSize() * self.PAD * self.POP
+        f, tk, boxes = set_words(ctx, sel, *args, g.content_w - 2 * pad, int(self.p["max_lines"]),
+                                 float(self.p["weight"]), x=g.x0 + pad, **kw)
+        if boxes:
+            pad = f.getSize() * self.PAD * self.POP
+            shift = g.x0 - (min(b[1] for b in boxes) - pad)
+            boxes = [(w, x + shift, base, ww, li) for w, x, base, ww, li in boxes]
+        return f, tk, boxes
 
     def _zones(self, ctx: Ctx, pages: list[list[int]], words: list[str]) -> tuple[float, float, float]:
         """(audiogram top, audiogram bottom, speaker top): fixed for the whole scene, below the
@@ -1016,8 +1260,12 @@ class Karaoke(SocialScene):
     # -- draw -------------------------------------------------------------------
     def draw(self, ctx: Ctx) -> None:
         # word logic runs half a frame ahead so the frame that follows an onset always shows
-        # the pill on the new word (the sound lands inside that frame's shutter)
+        # the pill on the new word (the sound lands inside that frame's shutter). Which word and
+        # which page are lit is read once per delivered frame (ld): if the motion-blur
+        # sub-samples of one frame disagreed, the compositor would read the pill's jump from
+        # word to word as motion and smear it sideways across the line.
         c, lt = ctx.c, ctx.lt + ctx.frame * 0.5
+        ld = frame_time(ctx) + ctx.frame * 0.5
         g = _g(ctx)
         self.backdrop(ctx)
         words = self._word_list()
@@ -1028,11 +1276,11 @@ class Karaoke(SocialScene):
         if self.p.get("lines_per_page"):
             pages = self._line_pages(ctx, words, int(self.p["lines_per_page"]))
         starts = [timed[p[0]][1] if p else 0.0 for p in pages]
-        pi = max([k for k, s in enumerate(starts) if s <= lt + 1e-9] or [0])
+        pi = max([k for k, s in enumerate(starts) if s <= ld + 1e-9] or [0])
         page = pages[pi]
         p_start = 0.0 if pi == 0 else starts[pi]
         p_end = starts[pi + 1] if pi + 1 < len(pages) else self.dur + 10.0
-        active = max((i for i, (_, t) in enumerate(timed) if t <= lt + 1e-9), default=-1)
+        active = max((i for i, (_, t) in enumerate(timed) if t <= ld + 1e-9), default=-1)
         spb = self.beat_len
         emph = {_norm(e) for e in self.p["emphasis"]}
 
@@ -1057,49 +1305,77 @@ class Karaoke(SocialScene):
 
         box_of = {page[k]: boxes[k] for k in range(min(len(page), len(boxes)))}
         pad = size * self.PAD
-        pt, pb = size * 0.20, size * 0.26
-        rise = spb * 0.25
-        per_s = max((timed[active + 1][1] - timed[active][1]) if 0 <= active < len(timed) - 1 else spb * 0.5,
-                    ctx.frame)
-        per_s = min(per_s, spb * 0.5)
+        asc, desc = ink_extent(f)
+        pv = size * self.PAD_V
+        rise = spb * self.RISE
+
+        def anchor(i: int) -> float:
+            """Scale origin of word i: its centre, or its left / right edge when a centred pop
+            would carry its pill past x0 / x1 (line starts sit tight on the margin)."""
+            _w, x, _base, ww, _li = box_of[i]
+            half = (ww / 2 + pad) * self.POP
+            if x + ww / 2 - half < g.x0 - 0.01:
+                return x
+            if x + ww / 2 + half > g.x1 + 0.01:
+                return x + ww
+            return x + ww / 2
+
+        def pop_cap(i: int) -> float:
+            """Largest scale at which an edge-anchored pill still clears its neighbour by 2 px."""
+            _w, x, _base, ww, li = box_of[i]
+            ax = anchor(i)
+            if ax == x and (i + 1) in box_of and box_of[i + 1][4] == li:
+                return max(1.0, (box_of[i + 1][1] - 2.0 - x) / (ww + pad))
+            if ax == x + ww and (i - 1) in box_of and box_of[i - 1][4] == li:
+                _wp, xp, _bp, wwp, _lp = box_of[i - 1]
+                return max(1.0, (x + ww - xp - wwp - 2.0) / (ww + pad))
+            return self.POP
 
         def scale_of(i: int) -> float:
             k = 1.0
+            pop = min(self.POP, pop_cap(i)) - 1
             if i == active:
-                k += 0.08 * E.out_expo(E.clamp((lt - timed[i][1]) / rise))
+                k += pop * E.out_expo(E.clamp((lt - timed[i][1]) / rise))
             elif i == active - 1 and active < len(timed):
-                k += 0.08 * (1 - E.out_expo(E.clamp((lt - timed[active][1]) / rise)))
+                k += pop * (1 - E.out_expo(E.clamp((lt - timed[active][1]) / rise)))
             if i < active and _norm(timed[i][0]) in emph:
                 k += 0.05 * _beat_pulse(ctx, float(self.p["pulse"]) or 0.5, 0.35)
             return k
 
-        def wrect(i: int) -> skia.Rect:
+        def wrect(i: int, grow: float = 1.0) -> skia.Rect:
+            """Word box of i: advance width + side padding, ascender to descender ink + padding,
+            scaled with the word about the same centre it is drawn with."""
             w, x, base, ww, li = box_of[i]
             dy, _a = line_shift(li)
             k = scale_of(i)
-            cxw = x + ww / 2
-            return skia.Rect(cxw - ww * k / 2 - pad, base - cap * k - pt + dy - (k - 1) * cap * 0.0,
-                             cxw + ww * k / 2 + pad, base + pb + dy)
+            cx, cy = anchor(i), base - cap / 2 + dy
+            l, r = x - pad * grow, x + ww + pad * grow
+            t, b = base + dy - asc - pv * grow, base + dy + desc + pv * grow
+            return skia.Rect(cx + (l - cx) * k, cy + (t - cy) * k, cx + (r - cx) * k, cy + (b - cy) * k)
 
-        # -- pill: tail springs off the previous word, head sweeps across the active word
+        # -- pill: one word at a time. On each onset it lands on the new word already holding the
+        # whole word (ascenders to descenders), its padding springing open (about 2 % overshoot);
+        # the previous word's pill lets go within one frame. It never spans two words.
         pill = None
         if active in box_of:
             u = max(lt - timed[active][1], 0.0)
-            tgt = wrect(active)
-            head = tgt.left() + (tgt.right() - tgt.left()) * (0.18 + 0.82 * E.out_cubic(E.clamp(u / (per_s * 0.85))))
-            tail = tgt.left()
-            if active - 1 in box_of and box_of[active - 1][4] == box_of[active][4]:
-                src = wrect(active - 1)
-                k = E.Spring.settling(spb * 0.25, PILL_BOUNCE).value(u)
-                tail = src.left() + (tgt.left() - src.left()) * k
-            head = max(head, tail + tgt.height() * 0.5)
-            pill = skia.Rect(min(tail, head - tgt.height() * 0.5), tgt.top(), head, tgt.bottom())
+            grow = 0.35 + 0.65 * E.Spring.settling(rise, PILL_BOUNCE).value(u)
+            prev = active - 1
+            let_go = min(spb * 0.125, ctx.frame)  # one frame: only the onset frame shows it letting go
+            if prev in box_of and u < let_go:
+                gu = E.clamp(u / let_go)
+                pr = wrect(prev, 1.0 - gu)
+                pa = (1 - E.out_cubic(gu)) * 0.55 * line_shift(box_of[prev][4])[1]
+                if pa > 0.01:
+                    rad = min(pr.height() * 0.3, g.px(26))
+                    c.drawRRect(skia.RRect.MakeRectXY(pr, rad, rad), D.paint(ctx.pal("accent", pa)))
+            pill = wrect(active, grow)
             _dy, a_line = line_shift(box_of[active][4])
             is_e = _norm(timed[active][0]) in emph
             col = ctx.pal("accent2" if is_e else "accent", a_line)
             rad = min(pill.height() * 0.3, g.px(26))
             c.drawRRect(skia.RRect.MakeRectXY(pill, rad, rad), D.paint(col))
-            ctx.publish("pill", tgt, word=timed[active][0])
+            ctx.publish("pill", wrect(active), word=timed[active][0])
 
         def draw_word(i: int, color_fn) -> None:
             w, x, base, ww, li = box_of[i]
@@ -1108,28 +1384,20 @@ class Karaoke(SocialScene):
                 return
             k = scale_of(i)
             c.save()
-            _scale_about(c, x + ww / 2, base - cap / 2 + dy, k)
+            _scale_about(c, anchor(i), base - cap / 2 + dy, k)
             D.draw_text(c, w, x, base + dy, f, color_fn(i, a), align="left", tracking=tk)
             c.restore()
 
-        def base_color(i: int, a: float) -> int:
+        def word_color(i: int, a: float) -> int:
+            if i == active and pill is not None:  # the whole word sits inside the pill
+                return ctx.pal("ink_dark", a)
             if i < active:
                 return ctx.pal("accent" if _norm(timed[i][0]) in emph else "ink", a)
-            if i == active:  # the part not yet swept stays dimmed until the pill fills it
-                return dim_color(ctx, "ink", DIM, a)
             return dim_color(ctx, "ink", DIM, a)
 
         for i in page:
             if i in box_of:
-                draw_word(i, base_color)
-        if pill is not None:
-            rad = min(pill.height() * 0.3, g.px(26))
-            c.save()
-            c.clipRRect(skia.RRect.MakeRectXY(pill, rad, rad), doAntiAlias=True)
-            for i in (active - 1, active):
-                if i in box_of:
-                    draw_word(i, lambda _i, a: ctx.pal("ink_dark", a))
-            c.restore()
+                draw_word(i, word_color)
 
         a0, a1, sp_top = self._zones(ctx, pages, words)
         if self.p["audiogram"]:
@@ -1159,7 +1427,7 @@ class Karaoke(SocialScene):
         bw = (g.content_w - gap * (n - 1)) / n
         mid = (y0 + y1) / 2
         hmax = (y1 - y0) / 2
-        t = _film_t(ctx)
+        t = _frame_film_t(ctx)  # the bars step on the 8ths: one envelope value per frame
         beat = ctx.tl.time_to_beat(t)
         e8 = (1.0 - E.clamp((beat * 2 - math.floor(beat * 2)) / 0.95)) ** 1.5
         e1 = (1.0 - E.clamp((beat - math.floor(beat)) / 0.95)) ** 1.5
@@ -1182,7 +1450,7 @@ class Karaoke(SocialScene):
 @register("follow")
 class Follow(SocialScene):
     """Call-to-follow end card. The pill of the previous karaoke scene is handed over on the
-    cut (match on "pill") and springs out into a full-width follow button; the headline rises
+    cut (match on "pill") and springs out into a full-width follow button over one beat; the headline rises
     in line by line on the 8ths; the button is pressed on `tap_at` (default beat 2) with a
     click + chime, its label morphs to `done`, and it kicks on every beat after (spring).
     `stats` ([{"value": "312", "label": "clips"}, ...]) sit in a row above the chrome, rising
@@ -1190,6 +1458,13 @@ class Follow(SocialScene):
     defaults = {**SocialScene.defaults, "kicker": "Follow for more", "text": "One idea a day, set to the beat.",
                 "button": "Follow", "done": "Following", "tap_at": "2b", "note": "", "label": "follow",
                 "weight": 650, "stats": []}
+
+    def shutter(self, lt: float) -> float:
+        """A narrower shutter (45 degrees) while the pill springs out into the button: the morph
+        moves and widens a flat accent shape fast, and a full 180-degree smear turns it into a
+        soft blob for the first frames of the card."""
+        m = super().shutter(lt)
+        return min(m, 0.25) if lt < self.beat_len else m
 
     def cues(self) -> list[Cue]:
         tap = float(self.p["tap_at"])
@@ -1200,9 +1475,36 @@ class Follow(SocialScene):
                     Cue("hit", tap, data={"strength": 0.4, "flash": 0.0})]
         return out
 
+    def nod(self, lt: float, li: int, nlines: int) -> float:
+        """0..1 lift of headline line li: after the press the headline nods one line per beat,
+        alternating down the block until the end (the hook's pulse, as a rhyme), with the same
+        envelope as Hook._nod."""
+        tap_b = self.tl.beats_of(float(self.p["tap_at"]), self.start)
+        lb = self._beat_of(lt)
+        b = math.floor(lb + 1e-9)
+        b0 = math.ceil(tap_b - 1e-6) + 1
+        if b < b0 or (b - b0) % max(nlines, 1) != li:
+            return 0.0
+        fr = lb - b
+        if fr < 1 / 6:
+            return E.out_cubic(fr * 6)
+        return 1.0 - E.in_out_sine((fr - 1 / 6) / (5 / 6))
+
+    def sheen_at(self, lt: float) -> float | None:
+        """Progress (0..1, over the whole beat) of the light sweep across the button: on every beat
+        from beat 1 up to the press, so the call to action counts the bar in; None otherwise."""
+        tap_b = self.tl.beats_of(float(self.p["tap_at"]), self.start)
+        lb = self._beat_of(lt)
+        b = math.floor(lb + 1e-9)
+        if b < 1 or b >= tap_b - 1e-6:
+            return None
+        return lb - b
+
     def button_rect(self, ctx: Ctx, top: float) -> skia.Rect:
+        """Resting button: inset 28 px a side so the beat kick (+2.5 %) and the spring's
+        overshoot stay inside the margins."""
         g = _g(ctx)
-        return skia.Rect(g.x0, top, g.x1, top + g.px(152))
+        return skia.Rect(g.x0 + g.px(28), top, g.x1 - g.px(28), top + g.px(152))
 
     def draw(self, ctx: Ctx) -> None:
         c, lt = ctx.c, ctx.lt
@@ -1217,11 +1519,13 @@ class Follow(SocialScene):
         f, tk, boxes = set_words(ctx, str(self.p["text"]).split(), "title", g.content_w, 3,
                                  float(self.p["weight"]), top=top)
         cap = D.cap_height(f)
-        for w, x, base, ww, li in boxes:
+        for w, x, base, _ww, li in boxes:
             u = E.out_expo(E.clamp((lt - li * spb * 0.5 + ctx.frame * 0.5) / (spb * 0.25)))
             if u <= 0:
                 continue
-            D.draw_text(c, w, x, base + (1 - u) * g.bl(7), f, ctx.pal("ink", u), align="left", tracking=tk)
+            lift = self.nod(lt, li, (boxes[-1][4] + 1) if boxes else 1) * f.getSize() * NOD
+            D.draw_text(c, w, x, base + (1 - u) * g.bl(7) - lift, f, ctx.pal("ink", u), align="left",
+                        tracking=tk)
         block_bottom = boxes[-1][2] + f.getSize() * 0.25 if boxes else top + cap
         # handle row
         hy = block_bottom + g.bl(6)
@@ -1236,17 +1540,18 @@ class Follow(SocialScene):
         tgt = self.button_rect(ctx, btop)
         sp = E.Spring.settling(1.0, PILL_BOUNCE)
         if ctx.handed_off("pill"):
-            r = ctx.handoff("pill", tgt, dur="1/2b", ease=sp.ease())
+            r = ctx.handoff("pill", tgt, dur="1b", ease=sp.ease())
         else:
-            k = E.Spring.settling(spb * 0.5, PILL_BOUNCE).value(max(lt, 0.0))
+            k = E.Spring.settling(spb, PILL_BOUNCE).value(max(lt, 0.0))
             cx, cy = tgt.centerX(), tgt.centerY()
             r = skia.Rect(cx - tgt.width() / 2 * k, cy - tgt.height() / 2 * k, cx + tgt.width() / 2 * k,
                           cy + tgt.height() / 2 * k)
         tap = float(self.p["tap_at"])
-        pressed = lt >= tap
+        # pressed state (colour, label) switches once per delivered frame, never mid-shutter
+        pressed = frame_time(ctx) >= tap - 1e-6
         # beat kick after the press (spring 1 frame after the beat), press dip on the tap
         if pressed:
-            since = lt - tap
+            since = max(lt - tap, 0.0)
             dip = 1.0 - 0.05 * (1 - E.Spring.settling(spb * 0.6, 0.35).value(since))
             kick = 0.0
             b = ctx.local_beat
@@ -1259,6 +1564,20 @@ class Follow(SocialScene):
                           cy + r.height() / 2 * k)
         col = ctx.pal("ink") if pressed else ctx.pal("accent")
         D.rrect(c, r.left(), r.top(), r.width(), r.height(), r.height() / 2, D.paint(col))
+        sh = self.sheen_at(lt)
+        if sh is not None:  # "tap me": a light band sweeps the button on every beat before the press
+            c.save()
+            c.clipRRect(skia.RRect.MakeRectXY(r, r.height() / 2, r.height() / 2), doAntiAlias=True)
+            bw = r.height() * 1.4
+            x = r.left() - 1.6 * bw + (r.width() + 2.2 * bw) * E.in_out_sine(sh)
+            p = skia.Path()
+            p.moveTo(x, r.bottom())
+            p.lineTo(x + bw * 0.55, r.top())
+            p.lineTo(x + bw * 1.55, r.top())
+            p.lineTo(x + bw, r.bottom())
+            p.close()
+            c.drawPath(p, D.paint(ctx.pal("paper", 0.62)))
+            c.restore()
         if pressed:  # ripple from the tap point
             ru = E.out_quint(E.clamp((lt - tap) / spb))
             c.save()
@@ -1304,18 +1623,20 @@ class Follow(SocialScene):
         bottom = chrome_top(ctx) - g.bl(7)
         top = max(y_min, bottom - D.cap_height(fv) - g.bl(4) - D.cap_height(fl) - g.bl(3))
         c.drawRect(skia.Rect(g.x0, top - g.bl(4), g.x1, top - g.bl(4) + g.px(2)), D.paint(dim_color(ctx, "ink", 0.22)))
+        ft = frame_time(ctx)  # the value text and colour switch on landing: once per frame
         for k, s in enumerate(stats):
             t0 = tap + spb * 0.5 * k
-            u = E.out_expo(E.clamp((lt - t0) / (spb * 0.25)))
+            landed = ft >= t0 - 1e-6
+            u = E.out_expo(E.clamp((lt - t0) / (spb * 0.25))) if landed else 0.0
             x = g.x0 + k * (colw + g.gutter)
             val = str(s.get("value", ""))
             m = re.fullmatch(r"(\D*)(\d+)(\D*)", val)
-            if m and u > 0:
-                cu = E.out_quint(E.clamp((lt - t0) / spb))
+            if m and landed:
+                cu = E.out_quint(E.clamp((ft - t0) / spb))  # one value per frame: no ghost digits
                 val = f"{m.group(1)}{int(round(int(m.group(2)) * cu))}{m.group(3)}"
             a = 0.35 + 0.65 * u
             yb = top + D.cap_height(fv) + (1 - u) * g.bl(4)
-            D.draw_text(c, val, x, yb, fv, ctx.pal("accent" if u > 0 else "ink", a) if u > 0 else
+            D.draw_text(c, val, x, yb, fv, ctx.pal("accent", a) if landed else
                         dim_color(ctx, "ink", 0.35), align="left", tracking=vr.tk(ctx, "display"))
             D.draw_text(c, str(s.get("label", "")).upper(), x, yb + g.bl(3) + D.cap_height(fl), fl,
                         dim_color(ctx, "ink", 0.7, a), align="left", tracking=lr.tk(ctx))

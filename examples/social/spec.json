@@ -1,34 +1,48 @@
-// Social clip, beat-locked at 86 BPM (one beat = 0.698 s, an 8th = 0.349 s), 5 bars, 20 beats.
-// Every timing is in beats ("0b", "1/2b", "8b"); nothing is in seconds.
-// hook: four lines land one per beat (1 bar) -> 1/2-beat wipe up ->
-// quote card revealed word by word on the 8ths (2 bars), riser into ->
-// hard cut on the bar line -> karaoke captions, one sentence per bar, words on the 8ths, with
-// the speaker lower third (2 bars), ending on "stop." with a beat of air.
-// The "follow" end card (pill hand-off into a follow button) is available as a scene type;
-// the bundled example stays inside the 15 s example cap.
+// Social clip, beat-locked at 128 BPM (one beat = 0.469 s, an 8th = 0.234 s): 8 bars, 32 beats,
+// four 8-beat scenes. Every timing is in beats ("0b", "1/2b", "8b"); nothing is in seconds.
+// hook (2 bars): four lines land one per beat, then a weight pulse runs down the stack one line
+//   per beat while the watch-time readout crosses the 2 s mark; riser into ->
+// hard cut on the bar line -> quote (2 bars): a full-bleed paper sheet lands on the cut; the
+//   words land on the 8ths from the cut, the byline on the next beat, the editor's mark-up one
+//   per 8th, and the sheet pushes in under a riser ->
+// hard cut on the bar line -> karaoke (2 bars): one sentence per bar, words on the 8ths, the pill
+//   holds one word at a time; speaker lower third on the grid; riser into ->
+// hard cut on the bar line -> follow (2 bars): the pill becomes the follow button, the button is
+//   pressed on beat 4, the stats count up on the following beats.
 {
   "mode": "social",
   "creator": { "name": "Kinetic Studio", "handle": "@kineticstudio", "series": "One idea a day", "initials": "KS" },
-  "music": { "style": "lofi", "bpm": 86 },
+  "music": { "style": "lofi", "bpm": 128 },
+  // no whole-frame zoom bump on the beat: its step lands inside the shutter of the beat frame and
+  // softens every edge of it; the beat is carried by the scenes' own pulses, nods and ticks
+  "camera": { "bump": 0 },
   "markers": [
     { "kind": "section", "at": "0b", "name": "intro", "energy": 1 },
-    { "kind": "section", "at": "tips", "name": "groove", "energy": 2 }
+    { "kind": "section", "at": "quote", "name": "build", "energy": 2 },
+    { "kind": "section", "at": "tips", "name": "groove", "energy": 3 },
+    { "kind": "section", "at": "end", "name": "outro", "energy": 2 }
   ],
   "scenes": [
     { "type": "hook", "id": "hook", "kicker": "Short-form, rule one",
       "lines": ["Two", "seconds.", "to earn the", "next ten."], "roles": ["display", "display", "title", "headline"],
-      "emphasis": ["seconds."], "first": "0b", "stagger": "1b", "dur": "4b" },
+      "emphasis": ["seconds."], "first": "0b", "stagger": "1b", "dur": "8b" },
     { "type": "quote", "id": "quote", "kicker": "Pull quote", "meta": "No. 014",
-      "transition": { "kind": "wipe", "shape": "rect", "dir": "up", "dur": "1/2b", "edge": "accent", "soft": 0 },
+      "transition": { "kind": "cut", "on": "downbeat" },
       "text": "“Nobody remembers the clip that tried to say everything.”",
       "emphasis": ["remembers", "everything.”"],
       "speaker": { "name": "Mara Quinn", "role": "Short-form editor", "initials": "MQ" },
-      "first": "1/2b", "stagger": "1/2b", "dur": "8b" },
+      "first": "0b", "stagger": "1/2b", "dur": "8b" },
     { "type": "karaoke", "id": "tips", "kicker": "Two rules, one bar each",
       "transition": { "kind": "cut", "on": "downbeat" },
       "text": "Make the first two seconds count. Cut on the beat, then stop.",
-      "per": "1/2b", "page_on": "bar", "emphasis": ["two", "seconds", "beat,", "stop."], "riser": false,
+      "per": "1/2b", "page_on": "bar", "emphasis": ["two", "seconds", "beat,", "stop."], "riser": true,
       "speaker": { "name": "Mara Quinn", "role": "Short-form editor", "initials": "MQ" },
+      "dur": "8b" },
+    { "type": "follow", "id": "end", "kicker": "Follow for rule two",
+      "transition": { "kind": "cut", "on": "downbeat" },
+      "text": "One idea a day, set to the beat.", "button": "Follow", "done": "Following", "tap_at": "4b",
+      "stats": [{ "value": "312", "label": "clips" }, { "value": "48k", "label": "followers" },
+                { "value": "128", "label": "bpm" }],
       "dur": "8b" }
   ]
 }
