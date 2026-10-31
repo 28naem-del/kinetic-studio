@@ -597,7 +597,7 @@ class Diagram(Scene):
                 if u >= 1 and ut > 0:
                     # the house highlighter, in accent2, marks each level the miss falls through
                     lw = D.text_w(lf, lab, T["meta"].tk(ctx))
-                    box = skia.Rect(lx - g.bl(1), cy - xh / 2 - g.bl(1.25), lx + lw + g.bl(1), cy + xh / 2 + g.bl(1.25))
+                    box = skia.Rect(lx - g.bl(1), cy - xh / 2 - g.bl(0.75), lx + lw + g.bl(1), cy + xh / 2 + g.bl(0.75))
                     hl = highlight(ctx, box, ut, "accent2")
                     _two_tone(ctx, lab, lx, cy + xh / 2, lf, edge_c, ctx.pal(_on(ctx, "accent2")), hl, T["meta"].tk(ctx))
                 else:
