@@ -106,7 +106,49 @@ class _AllocatingDenseFlow(Protocol):
 
 def _calc_flow(engine: cv2.DISOpticalFlow, first: NDArray[np.uint8],
                second: NDArray[np.uint8]) -> NDArray[np.float32]:
-    return cast(_AllocatingDenseFlow, engine).calc(first, second, None)
+    height, width = first.shape
+    patch, finest = engine.getPatchSize(), engine.getFinestScale()
+    fraction = 1 << finest
+    if min(height, width) >= patch * fraction or first.shape != second.shape:
+        return cast(_AllocatingDenseFlow, engine).calc(first, second, None)
+    # Tiny portrait DIS is orientation-sensitive. Canonicalize only this
+    # existing enlargement branch to landscape; the exact-transpose probe
+    # showed signed boundary-valid motion rescues without regressions.
+    transposed = height > width
+    if transposed:
+        work_first = np.ascontiguousarray(first.T)
+        work_second = np.ascontiguousarray(second.T)
+        work_height, work_width = width, height
+    else:
+        work_first, work_second = first, second
+        work_height, work_width = height, width
+    # DIS 5.0 calc() bounds its pyramid by BOTH axes, but its small-image
+    # auto-selection replaces that bound using width alone and mutates finest.
+    # Reproduce calc()'s exact max_possible_scale test and choose the least
+    # integer enlargement that keeps auto-selection unreachable. Starting at
+    # 2**finest preserves at least the original finest-level detail. The loop
+    # also matches C++'s truncation semantics for non-default engine settings.
+    factor = fraction
+    while True:
+        enlarged_short = min(height, width) * factor
+        enlarged_long = max(height, width) * factor
+        long_scale = int(math.log(enlarged_long / (4.0 * patch)) / math.log(2.0) + 0.5)
+        short_scale = int(math.log(enlarged_short / patch) / math.log(2.0))
+        if min(long_scale, short_scale) >= finest:
+            break
+        factor += 1
+    size = (work_width * factor, work_height * factor)
+    enlarged_first = cast(NDArray[np.uint8], cv2.resize(work_first, size, interpolation=cv2.INTER_LINEAR))
+    enlarged_second = cast(NDArray[np.uint8], cv2.resize(work_second, size, interpolation=cv2.INTER_LINEAR))
+    flow = cast(_AllocatingDenseFlow, engine).calc(enlarged_first, enlarged_second, None)
+    # DIS returns displacement in its input coordinates. Restore both the
+    # canonical sampling grid and vector units; do not seed or replace flow.
+    restored = cv2.resize(flow, (work_width, work_height), interpolation=cv2.INTER_LINEAR)
+    restored = restored / np.float32(factor)
+    if transposed:
+        # Transpose the grid back and exchange (dy, dx) for caller (dx, dy).
+        restored = np.ascontiguousarray(restored.transpose(1, 0, 2)[..., [1, 0]])
+    return cast(NDArray[np.float32], restored)
 
 
 def _require_sample(sample: np.ndarray | None) -> np.ndarray:
